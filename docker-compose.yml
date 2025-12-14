@@ -30,6 +30,8 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgres://cedar:cedar@db:5432/cedar?sslmode=disable}
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      # CORS - allow requests from frontend
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-*}
       # Authentication settings
       AUTH_MODE: ${AUTH_MODE:-none}
       AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
@@ -74,7 +76,7 @@ services:
       context: ./web
       dockerfile: Dockerfile
       args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
         VITE_AUTH_MODE: ${AUTH_MODE:-none}
         VITE_AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
         VITE_AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}

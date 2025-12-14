@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
-import { Layout, Menu, Space, Tag, Typography, theme, Button, Avatar, Dropdown, Spin, Result } from "antd";
+import { Layout, Menu, Space, Tag, Typography, theme, Button, Avatar, Dropdown, Spin, Result, Tooltip } from "antd";
 import {
   AuditOutlined,
   FileTextOutlined,
@@ -10,6 +10,8 @@ import {
   UserOutlined,
   LogoutOutlined,
   LoginOutlined,
+  SunOutlined,
+  MoonOutlined,
 } from "@ant-design/icons";
 import Dashboard from "./pages/Dashboard";
 import Applications from "./pages/Applications";
@@ -18,6 +20,27 @@ import Policies from "./pages/Policies";
 import Audit from "./pages/Audit";
 import Admin from "./pages/Admin";
 import { AuthProvider, useAuth, isAuthEnabled } from "./auth";
+import { useTheme } from "./ThemeProvider";
+
+// Theme toggle component
+function ThemeToggle() {
+  const { isDark, toggleTheme } = useTheme();
+  const { token } = theme.useToken();
+
+  return (
+    <Tooltip title={isDark ? "Switch to light mode" : "Switch to dark mode"}>
+      <Button
+        type="text"
+        icon={isDark ? <SunOutlined /> : <MoonOutlined />}
+        onClick={toggleTheme}
+        style={{
+          fontSize: 18,
+          color: token.colorTextSecondary,
+        }}
+      />
+    </Tooltip>
+  );
+}
 
 // Login page component
 function LoginPage() {
@@ -45,9 +68,12 @@ function LoginPage() {
         title="Cedar Authorization Portal"
         subTitle="Please sign in to continue"
         extra={
-          <Button type="primary" icon={<LoginOutlined />} onClick={login} size="large">
-            Sign In
-          </Button>
+          <Space direction="vertical" size={16}>
+            <Button type="primary" icon={<LoginOutlined />} onClick={login} size="large">
+              Sign In
+            </Button>
+            <ThemeToggle />
+          </Space>
         }
       />
     </div>
@@ -57,6 +83,7 @@ function LoginPage() {
 // User menu component
 function UserMenu() {
   const { user, logout, authMode } = useAuth();
+  const { isDark, toggleTheme } = useTheme();
 
   if (!user || authMode === 'none') {
     return null;
@@ -75,6 +102,13 @@ function UserMenu() {
         </div>
       ),
       disabled: true,
+    },
+    { type: 'divider' as const },
+    {
+      key: 'theme',
+      icon: isDark ? <SunOutlined /> : <MoonOutlined />,
+      label: isDark ? 'Light Mode' : 'Dark Mode',
+      onClick: toggleTheme,
     },
     { type: 'divider' as const },
     {
@@ -182,6 +216,7 @@ function AppShell() {
               {selectedKey === "/" ? "Dashboard" : selectedKey.replace("/", "").replace(/\b\w/g, (c) => c.toUpperCase())}
             </Typography.Text>
             <Space size={8}>
+              <ThemeToggle />
               {authMode !== 'none' && <UserMenu />}
               {authMode === 'none' && (
                 <Space size={8} wrap>

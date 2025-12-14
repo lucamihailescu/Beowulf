@@ -2,7 +2,7 @@ FROM node:22-alpine AS build
 WORKDIR /app
 
 # Build arguments for Vite environment variables
-ARG VITE_API_BASE_URL=http://localhost:8080
+ARG VITE_API_BASE_URL=/api
 ARG VITE_AUTH_MODE=none
 ARG VITE_AZURE_TENANT_ID=
 ARG VITE_AZURE_CLIENT_ID=

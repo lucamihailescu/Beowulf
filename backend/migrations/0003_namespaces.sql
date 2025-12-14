@@ -23,7 +23,8 @@ SET namespace_id = n.id
 FROM namespaces n
 WHERE a.namespace = n.name;
 
--- Add foreign key constraint
+-- Add foreign key constraint (drop first if exists to make idempotent)
+ALTER TABLE applications DROP CONSTRAINT IF EXISTS fk_applications_namespace;
 ALTER TABLE applications
 ADD CONSTRAINT fk_applications_namespace
 FOREIGN KEY (namespace_id) REFERENCES namespaces(id);

@@ -124,13 +124,12 @@ export type AuditFilter = {
 };
 
 function defaultApiBaseUrl(): string {
-  // Prefer the current hostname so the UI works when accessed via 127.0.0.1, LAN IP, or port-forward.
-  const protocol = window.location.protocol;
-  const host = window.location.hostname;
-  return `${protocol}//${host}:8080`;
+  // Use relative /api path - nginx will proxy to the backend
+  // This works regardless of how the frontend is accessed (localhost, tunnel, LAN IP, etc.)
+  return '/api';
 }
 
-export const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL ?? defaultApiBaseUrl();
+export const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || defaultApiBaseUrl();
 
 // Token getter function - will be set by AuthProvider
 let tokenGetter: (() => Promise<string | null>) | null = null;
