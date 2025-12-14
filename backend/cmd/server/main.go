@@ -10,6 +10,7 @@ import (
 
 	"cedar/internal/authz"
 	"cedar/internal/config"
+	internalgrpc "cedar/internal/grpc"
 	"cedar/internal/httpserver"
 	"cedar/internal/storage"
 )
@@ -56,6 +57,14 @@ func main() {
 	}
 
 	authzSvc := authz.NewService(policyProvider, entityProvider)
+
+	// Start gRPC server
+	grpcServer := internalgrpc.NewServer(cfg, authzSvc)
+	go func() {
+		if err := grpcServer.Start(); err != nil {
+			log.Printf("gRPC server failed: %v", err)
+		}
+	}()
 
 	r := httpserver.NewRouter(cfg, authzSvc, appRepo, policyRepo, entityRepo, schemaRepo, auditRepo, namespaceRepo, cache)
 

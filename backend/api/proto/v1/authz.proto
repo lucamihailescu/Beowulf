@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package cedar.v1;
+
+option go_package = "cedar/api/gen/v1;authzv1";
+
+// AuthorizationService provides high-performance authorization checks.
+service AuthorizationService {
+  // Check performs a single authorization check.
+  rpc Check(CheckRequest) returns (CheckResponse);
+  
+  // BatchCheck performs multiple checks in parallel.
+  rpc BatchCheck(BatchCheckRequest) returns (BatchCheckResponse);
+}
+
+message CheckRequest {
+  string application_id = 1;
+  Entity principal = 2;
+  Entity action = 3;
+  Entity resource = 4;
+  map<string, Value> context = 5;
+}
+
+message CheckResponse {
+  bool allowed = 1;
+  repeated string reasons = 2;
+  repeated string errors = 3;
+}
+
+message BatchCheckRequest {
+  repeated CheckRequest checks = 1;
+}
+
+message BatchCheckResponse {
+  repeated CheckResponse results = 1;
+}
+
+message Entity {
+  string type = 1;
+  string id = 2;
+}
+
+// Value represents a dynamic value in the context (limited support for now)
+message Value {
+  oneof kind {
+    string string_value = 1;
+    int64 int_value = 2;
+    bool bool_value = 3;
+  }
+}
+
