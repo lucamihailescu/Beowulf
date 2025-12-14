@@ -105,3 +105,37 @@ func (s *Server) BatchCheck(ctx context.Context, req *authzv1.BatchCheckRequest)
 	}
 	return &authzv1.BatchCheckResponse{Results: results}, nil
 }
+
+func (s *Server) LookupResources(ctx context.Context, req *authzv1.LookupResourcesRequest) (*authzv1.LookupResourcesResponse, error) {
+	appID, err := strconv.ParseInt(req.ApplicationId, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid application_id: %v", err)
+	}
+
+	// Construct the context map
+	evalContext := make(map[string]interface{})
+	for k, v := range req.Context {
+		switch kind := v.Kind.(type) {
+		case *authzv1.Value_StringValue:
+			evalContext[k] = kind.StringValue
+		case *authzv1.Value_IntValue:
+			evalContext[k] = kind.IntValue
+		case *authzv1.Value_BoolValue:
+			evalContext[k] = kind.BoolValue
+		}
+	}
+
+	ids, err := s.authzService.LookupResources(ctx, authz.LookupInput{
+		ApplicationID: appID,
+		Principal:     authz.Reference{Type: req.Principal.Type, ID: req.Principal.Id},
+		Action:        authz.Reference{Type: req.Action.Type, ID: req.Action.Id},
+		ResourceType:  req.ResourceType,
+		Context:       evalContext,
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &authzv1.LookupResourcesResponse{ResourceIds: ids}, nil
+}

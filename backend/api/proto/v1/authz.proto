@@ -11,6 +11,9 @@ service AuthorizationService {
   
   // BatchCheck performs multiple checks in parallel.
   rpc BatchCheck(BatchCheckRequest) returns (BatchCheckResponse);
+
+  // LookupResources returns IDs of resources of a given type that the principal can access.
+  rpc LookupResources(LookupResourcesRequest) returns (LookupResourcesResponse);
 }
 
 message CheckRequest {
@@ -35,6 +38,18 @@ message BatchCheckResponse {
   repeated CheckResponse results = 1;
 }
 
+message LookupResourcesRequest {
+  string application_id = 1;
+  Entity principal = 2;
+  Entity action = 3;
+  string resource_type = 4;
+  map<string, Value> context = 5;
+}
+
+message LookupResourcesResponse {
+  repeated string resource_ids = 1;
+}
+
 message Entity {
   string type = 1;
   string id = 2;
@@ -48,4 +63,3 @@ message Value {
     bool bool_value = 3;
   }
 }
-

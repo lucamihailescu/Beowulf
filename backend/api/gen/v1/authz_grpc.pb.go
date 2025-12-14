@@ -19,8 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AuthorizationService_Check_FullMethodName      = "/cedar.v1.AuthorizationService/Check"
-	AuthorizationService_BatchCheck_FullMethodName = "/cedar.v1.AuthorizationService/BatchCheck"
+	AuthorizationService_Check_FullMethodName           = "/cedar.v1.AuthorizationService/Check"
+	AuthorizationService_BatchCheck_FullMethodName      = "/cedar.v1.AuthorizationService/BatchCheck"
+	AuthorizationService_LookupResources_FullMethodName = "/cedar.v1.AuthorizationService/LookupResources"
 )
 
 // AuthorizationServiceClient is the client API for AuthorizationService service.
@@ -33,6 +34,8 @@ type AuthorizationServiceClient interface {
 	Check(ctx context.Context, in *CheckRequest, opts ...grpc.CallOption) (*CheckResponse, error)
 	// BatchCheck performs multiple checks in parallel.
 	BatchCheck(ctx context.Context, in *BatchCheckRequest, opts ...grpc.CallOption) (*BatchCheckResponse, error)
+	// LookupResources returns IDs of resources of a given type that the principal can access.
+	LookupResources(ctx context.Context, in *LookupResourcesRequest, opts ...grpc.CallOption) (*LookupResourcesResponse, error)
 }
 
 type authorizationServiceClient struct {
@@ -63,6 +66,16 @@ func (c *authorizationServiceClient) BatchCheck(ctx context.Context, in *BatchCh
 	return out, nil
 }
 
+func (c *authorizationServiceClient) LookupResources(ctx context.Context, in *LookupResourcesRequest, opts ...grpc.CallOption) (*LookupResourcesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LookupResourcesResponse)
+	err := c.cc.Invoke(ctx, AuthorizationService_LookupResources_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuthorizationServiceServer is the server API for AuthorizationService service.
 // All implementations must embed UnimplementedAuthorizationServiceServer
 // for forward compatibility.
@@ -73,6 +86,8 @@ type AuthorizationServiceServer interface {
 	Check(context.Context, *CheckRequest) (*CheckResponse, error)
 	// BatchCheck performs multiple checks in parallel.
 	BatchCheck(context.Context, *BatchCheckRequest) (*BatchCheckResponse, error)
+	// LookupResources returns IDs of resources of a given type that the principal can access.
+	LookupResources(context.Context, *LookupResourcesRequest) (*LookupResourcesResponse, error)
 	mustEmbedUnimplementedAuthorizationServiceServer()
 }
 
@@ -88,6 +103,9 @@ func (UnimplementedAuthorizationServiceServer) Check(context.Context, *CheckRequ
 }
 func (UnimplementedAuthorizationServiceServer) BatchCheck(context.Context, *BatchCheckRequest) (*BatchCheckResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method BatchCheck not implemented")
+}
+func (UnimplementedAuthorizationServiceServer) LookupResources(context.Context, *LookupResourcesRequest) (*LookupResourcesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method LookupResources not implemented")
 }
 func (UnimplementedAuthorizationServiceServer) mustEmbedUnimplementedAuthorizationServiceServer() {}
 func (UnimplementedAuthorizationServiceServer) testEmbeddedByValue()                              {}
@@ -146,6 +164,24 @@ func _AuthorizationService_BatchCheck_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthorizationService_LookupResources_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LookupResourcesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthorizationServiceServer).LookupResources(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthorizationService_LookupResources_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthorizationServiceServer).LookupResources(ctx, req.(*LookupResourcesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuthorizationService_ServiceDesc is the grpc.ServiceDesc for AuthorizationService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -160,6 +196,10 @@ var AuthorizationService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "BatchCheck",
 			Handler:    _AuthorizationService_BatchCheck_Handler,
+		},
+		{
+			MethodName: "LookupResources",
+			Handler:    _AuthorizationService_LookupResources_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

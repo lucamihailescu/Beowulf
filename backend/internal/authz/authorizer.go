@@ -24,6 +24,15 @@ type EvaluateInput struct {
 	Context       map[string]any
 }
 
+// LookupInput describes a request to find accessible resources.
+type LookupInput struct {
+	ApplicationID int64
+	Principal     Reference
+	Action        Reference
+	ResourceType  string
+	Context       map[string]any
+}
+
 // EvaluationResult is a transport-friendly result for handlers.
 type EvaluationResult struct {
 	Decision string
@@ -39,6 +48,8 @@ type PolicyProvider interface {
 // EntityProvider supplies entities for an application as Cedar-compatible data.
 type EntityProvider interface {
 	Entities(ctx context.Context, applicationID int64) (cedar.EntityMap, error)
+	// SearchEntities returns IDs of entities of a specific type.
+	SearchEntities(ctx context.Context, applicationID int64, entityType string) ([]string, error)
 }
 
 // PolicyText is a simple carrier for policy content.
@@ -100,6 +111,58 @@ func (s *Service) Evaluate(ctx context.Context, in EvaluateInput) (EvaluationRes
 	return res, nil
 }
 
+// LookupResources returns a list of resource IDs of the given type that the principal can perform the action on.
+func (s *Service) LookupResources(ctx context.Context, in LookupInput) ([]string, error) {
+	// 1. Load Policies
+	policies, err := s.policies.ActivePolicies(ctx, in.ApplicationID)
+	if err != nil {
+		return nil, fmt.Errorf("load policies: %w", err)
+	}
+
+	ps := cedar.NewPolicySet()
+	for _, p := range policies {
+		var policy cedar.Policy
+		if err := policy.UnmarshalCedar([]byte(p.Text)); err != nil {
+			return nil, fmt.Errorf("parse policy %s: %w", p.ID, err)
+		}
+		ps.Add(cedar.PolicyID(p.ID), &policy)
+	}
+
+	// 2. Load Entities (Context for evaluation)
+	entities, err := s.entities.Entities(ctx, in.ApplicationID)
+	if err != nil {
+		return nil, fmt.Errorf("load entities: %w", err)
+	}
+
+	// 3. Find candidate resources
+	candidates, err := s.entities.SearchEntities(ctx, in.ApplicationID, in.ResourceType)
+	if err != nil {
+		return nil, fmt.Errorf("search entities: %w", err)
+	}
+
+	// 4. Evaluate for each candidate
+	principal := cedar.NewEntityUID(cedar.EntityType(in.Principal.Type), cedar.String(in.Principal.ID))
+	action := cedar.NewEntityUID(cedar.EntityType(in.Action.Type), cedar.String(in.Action.ID))
+	context := mapToRecord(in.Context)
+	targetType := cedar.EntityType(in.ResourceType)
+
+	var allowedIDs []string
+	for _, id := range candidates {
+		req := cedar.Request{
+			Principal: principal,
+			Action:    action,
+			Resource:  cedar.NewEntityUID(targetType, cedar.String(id)),
+			Context:   context,
+		}
+
+		if decision, _ := cedar.Authorize(ps, entities, req); decision == cedar.Allow {
+			allowedIDs = append(allowedIDs, id)
+		}
+	}
+
+	return allowedIDs, nil
+}
+
 func mapToRecord(ctx map[string]any) cedar.Record {
 	if len(ctx) == 0 {
 		return cedar.NewRecord(cedar.RecordMap{})
@@ -125,7 +188,6 @@ func toValue(v any) cedar.Value {
 	case int64:
 		return cedar.Long(t)
 	case float64:
-		// JSON numbers decode as float64; represent integers as Long, otherwise stringify.
 		if math.Trunc(t) == t {
 			return cedar.Long(int64(t))
 		}
@@ -140,7 +202,6 @@ func toValue(v any) cedar.Value {
 func reasonsToStrings(reasons []cedar.DiagnosticReason) []string {
 	out := make([]string, 0, len(reasons))
 	for _, r := range reasons {
-		// Marshal to JSON for a stable, opaque representation.
 		if data, err := json.Marshal(r); err == nil {
 			out = append(out, string(data))
 			continue

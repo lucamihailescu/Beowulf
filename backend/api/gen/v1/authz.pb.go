@@ -245,6 +245,126 @@ func (x *BatchCheckResponse) GetResults() []*CheckResponse {
 	return nil
 }
 
+type LookupResourcesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ApplicationId string                 `protobuf:"bytes,1,opt,name=application_id,json=applicationId,proto3" json:"application_id,omitempty"`
+	Principal     *Entity                `protobuf:"bytes,2,opt,name=principal,proto3" json:"principal,omitempty"`
+	Action        *Entity                `protobuf:"bytes,3,opt,name=action,proto3" json:"action,omitempty"`
+	ResourceType  string                 `protobuf:"bytes,4,opt,name=resource_type,json=resourceType,proto3" json:"resource_type,omitempty"`
+	Context       map[string]*Value      `protobuf:"bytes,5,rep,name=context,proto3" json:"context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LookupResourcesRequest) Reset() {
+	*x = LookupResourcesRequest{}
+	mi := &file_authz_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LookupResourcesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LookupResourcesRequest) ProtoMessage() {}
+
+func (x *LookupResourcesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_authz_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LookupResourcesRequest.ProtoReflect.Descriptor instead.
+func (*LookupResourcesRequest) Descriptor() ([]byte, []int) {
+	return file_authz_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *LookupResourcesRequest) GetApplicationId() string {
+	if x != nil {
+		return x.ApplicationId
+	}
+	return ""
+}
+
+func (x *LookupResourcesRequest) GetPrincipal() *Entity {
+	if x != nil {
+		return x.Principal
+	}
+	return nil
+}
+
+func (x *LookupResourcesRequest) GetAction() *Entity {
+	if x != nil {
+		return x.Action
+	}
+	return nil
+}
+
+func (x *LookupResourcesRequest) GetResourceType() string {
+	if x != nil {
+		return x.ResourceType
+	}
+	return ""
+}
+
+func (x *LookupResourcesRequest) GetContext() map[string]*Value {
+	if x != nil {
+		return x.Context
+	}
+	return nil
+}
+
+type LookupResourcesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ResourceIds   []string               `protobuf:"bytes,1,rep,name=resource_ids,json=resourceIds,proto3" json:"resource_ids,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LookupResourcesResponse) Reset() {
+	*x = LookupResourcesResponse{}
+	mi := &file_authz_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LookupResourcesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LookupResourcesResponse) ProtoMessage() {}
+
+func (x *LookupResourcesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_authz_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LookupResourcesResponse.ProtoReflect.Descriptor instead.
+func (*LookupResourcesResponse) Descriptor() ([]byte, []int) {
+	return file_authz_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *LookupResourcesResponse) GetResourceIds() []string {
+	if x != nil {
+		return x.ResourceIds
+	}
+	return nil
+}
+
 type Entity struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Type          string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
@@ -255,7 +375,7 @@ type Entity struct {
 
 func (x *Entity) Reset() {
 	*x = Entity{}
-	mi := &file_authz_proto_msgTypes[4]
+	mi := &file_authz_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -267,7 +387,7 @@ func (x *Entity) String() string {
 func (*Entity) ProtoMessage() {}
 
 func (x *Entity) ProtoReflect() protoreflect.Message {
-	mi := &file_authz_proto_msgTypes[4]
+	mi := &file_authz_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -280,7 +400,7 @@ func (x *Entity) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Entity.ProtoReflect.Descriptor instead.
 func (*Entity) Descriptor() ([]byte, []int) {
-	return file_authz_proto_rawDescGZIP(), []int{4}
+	return file_authz_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Entity) GetType() string {
@@ -312,7 +432,7 @@ type Value struct {
 
 func (x *Value) Reset() {
 	*x = Value{}
-	mi := &file_authz_proto_msgTypes[5]
+	mi := &file_authz_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -324,7 +444,7 @@ func (x *Value) String() string {
 func (*Value) ProtoMessage() {}
 
 func (x *Value) ProtoReflect() protoreflect.Message {
-	mi := &file_authz_proto_msgTypes[5]
+	mi := &file_authz_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -337,7 +457,7 @@ func (x *Value) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Value.ProtoReflect.Descriptor instead.
 func (*Value) Descriptor() ([]byte, []int) {
-	return file_authz_proto_rawDescGZIP(), []int{5}
+	return file_authz_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Value) GetKind() isValue_Kind {
@@ -417,7 +537,18 @@ const file_authz_proto_rawDesc = "" +
 	"\x11BatchCheckRequest\x12.\n" +
 	"\x06checks\x18\x01 \x03(\v2\x16.cedar.v1.CheckRequestR\x06checks\"G\n" +
 	"\x12BatchCheckResponse\x121\n" +
-	"\aresults\x18\x01 \x03(\v2\x17.cedar.v1.CheckResponseR\aresults\",\n" +
+	"\aresults\x18\x01 \x03(\v2\x17.cedar.v1.CheckResponseR\aresults\"\xd4\x02\n" +
+	"\x16LookupResourcesRequest\x12%\n" +
+	"\x0eapplication_id\x18\x01 \x01(\tR\rapplicationId\x12.\n" +
+	"\tprincipal\x18\x02 \x01(\v2\x10.cedar.v1.EntityR\tprincipal\x12(\n" +
+	"\x06action\x18\x03 \x01(\v2\x10.cedar.v1.EntityR\x06action\x12#\n" +
+	"\rresource_type\x18\x04 \x01(\tR\fresourceType\x12G\n" +
+	"\acontext\x18\x05 \x03(\v2-.cedar.v1.LookupResourcesRequest.ContextEntryR\acontext\x1aK\n" +
+	"\fContextEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12%\n" +
+	"\x05value\x18\x02 \x01(\v2\x0f.cedar.v1.ValueR\x05value:\x028\x01\"<\n" +
+	"\x17LookupResourcesResponse\x12!\n" +
+	"\fresource_ids\x18\x01 \x03(\tR\vresourceIds\",\n" +
 	"\x06Entity\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\"t\n" +
@@ -426,11 +557,12 @@ const file_authz_proto_rawDesc = "" +
 	"\tint_value\x18\x02 \x01(\x03H\x00R\bintValue\x12\x1f\n" +
 	"\n" +
 	"bool_value\x18\x03 \x01(\bH\x00R\tboolValueB\x06\n" +
-	"\x04kind2\x99\x01\n" +
+	"\x04kind2\xf1\x01\n" +
 	"\x14AuthorizationService\x128\n" +
 	"\x05Check\x12\x16.cedar.v1.CheckRequest\x1a\x17.cedar.v1.CheckResponse\x12G\n" +
 	"\n" +
-	"BatchCheck\x12\x1b.cedar.v1.BatchCheckRequest\x1a\x1c.cedar.v1.BatchCheckResponseB\x1aZ\x18cedar/api/gen/v1;authzv1b\x06proto3"
+	"BatchCheck\x12\x1b.cedar.v1.BatchCheckRequest\x1a\x1c.cedar.v1.BatchCheckResponse\x12V\n" +
+	"\x0fLookupResources\x12 .cedar.v1.LookupResourcesRequest\x1a!.cedar.v1.LookupResourcesResponseB\x1aZ\x18cedar/api/gen/v1;authzv1b\x06proto3"
 
 var (
 	file_authz_proto_rawDescOnce sync.Once
@@ -444,33 +576,42 @@ func file_authz_proto_rawDescGZIP() []byte {
 	return file_authz_proto_rawDescData
 }
 
-var file_authz_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_authz_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_authz_proto_goTypes = []any{
-	(*CheckRequest)(nil),       // 0: cedar.v1.CheckRequest
-	(*CheckResponse)(nil),      // 1: cedar.v1.CheckResponse
-	(*BatchCheckRequest)(nil),  // 2: cedar.v1.BatchCheckRequest
-	(*BatchCheckResponse)(nil), // 3: cedar.v1.BatchCheckResponse
-	(*Entity)(nil),             // 4: cedar.v1.Entity
-	(*Value)(nil),              // 5: cedar.v1.Value
-	nil,                        // 6: cedar.v1.CheckRequest.ContextEntry
+	(*CheckRequest)(nil),            // 0: cedar.v1.CheckRequest
+	(*CheckResponse)(nil),           // 1: cedar.v1.CheckResponse
+	(*BatchCheckRequest)(nil),       // 2: cedar.v1.BatchCheckRequest
+	(*BatchCheckResponse)(nil),      // 3: cedar.v1.BatchCheckResponse
+	(*LookupResourcesRequest)(nil),  // 4: cedar.v1.LookupResourcesRequest
+	(*LookupResourcesResponse)(nil), // 5: cedar.v1.LookupResourcesResponse
+	(*Entity)(nil),                  // 6: cedar.v1.Entity
+	(*Value)(nil),                   // 7: cedar.v1.Value
+	nil,                             // 8: cedar.v1.CheckRequest.ContextEntry
+	nil,                             // 9: cedar.v1.LookupResourcesRequest.ContextEntry
 }
 var file_authz_proto_depIdxs = []int32{
-	4, // 0: cedar.v1.CheckRequest.principal:type_name -> cedar.v1.Entity
-	4, // 1: cedar.v1.CheckRequest.action:type_name -> cedar.v1.Entity
-	4, // 2: cedar.v1.CheckRequest.resource:type_name -> cedar.v1.Entity
-	6, // 3: cedar.v1.CheckRequest.context:type_name -> cedar.v1.CheckRequest.ContextEntry
-	0, // 4: cedar.v1.BatchCheckRequest.checks:type_name -> cedar.v1.CheckRequest
-	1, // 5: cedar.v1.BatchCheckResponse.results:type_name -> cedar.v1.CheckResponse
-	5, // 6: cedar.v1.CheckRequest.ContextEntry.value:type_name -> cedar.v1.Value
-	0, // 7: cedar.v1.AuthorizationService.Check:input_type -> cedar.v1.CheckRequest
-	2, // 8: cedar.v1.AuthorizationService.BatchCheck:input_type -> cedar.v1.BatchCheckRequest
-	1, // 9: cedar.v1.AuthorizationService.Check:output_type -> cedar.v1.CheckResponse
-	3, // 10: cedar.v1.AuthorizationService.BatchCheck:output_type -> cedar.v1.BatchCheckResponse
-	9, // [9:11] is the sub-list for method output_type
-	7, // [7:9] is the sub-list for method input_type
-	7, // [7:7] is the sub-list for extension type_name
-	7, // [7:7] is the sub-list for extension extendee
-	0, // [0:7] is the sub-list for field type_name
+	6,  // 0: cedar.v1.CheckRequest.principal:type_name -> cedar.v1.Entity
+	6,  // 1: cedar.v1.CheckRequest.action:type_name -> cedar.v1.Entity
+	6,  // 2: cedar.v1.CheckRequest.resource:type_name -> cedar.v1.Entity
+	8,  // 3: cedar.v1.CheckRequest.context:type_name -> cedar.v1.CheckRequest.ContextEntry
+	0,  // 4: cedar.v1.BatchCheckRequest.checks:type_name -> cedar.v1.CheckRequest
+	1,  // 5: cedar.v1.BatchCheckResponse.results:type_name -> cedar.v1.CheckResponse
+	6,  // 6: cedar.v1.LookupResourcesRequest.principal:type_name -> cedar.v1.Entity
+	6,  // 7: cedar.v1.LookupResourcesRequest.action:type_name -> cedar.v1.Entity
+	9,  // 8: cedar.v1.LookupResourcesRequest.context:type_name -> cedar.v1.LookupResourcesRequest.ContextEntry
+	7,  // 9: cedar.v1.CheckRequest.ContextEntry.value:type_name -> cedar.v1.Value
+	7,  // 10: cedar.v1.LookupResourcesRequest.ContextEntry.value:type_name -> cedar.v1.Value
+	0,  // 11: cedar.v1.AuthorizationService.Check:input_type -> cedar.v1.CheckRequest
+	2,  // 12: cedar.v1.AuthorizationService.BatchCheck:input_type -> cedar.v1.BatchCheckRequest
+	4,  // 13: cedar.v1.AuthorizationService.LookupResources:input_type -> cedar.v1.LookupResourcesRequest
+	1,  // 14: cedar.v1.AuthorizationService.Check:output_type -> cedar.v1.CheckResponse
+	3,  // 15: cedar.v1.AuthorizationService.BatchCheck:output_type -> cedar.v1.BatchCheckResponse
+	5,  // 16: cedar.v1.AuthorizationService.LookupResources:output_type -> cedar.v1.LookupResourcesResponse
+	14, // [14:17] is the sub-list for method output_type
+	11, // [11:14] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_authz_proto_init() }
@@ -478,7 +619,7 @@ func file_authz_proto_init() {
 	if File_authz_proto != nil {
 		return
 	}
-	file_authz_proto_msgTypes[5].OneofWrappers = []any{
+	file_authz_proto_msgTypes[7].OneofWrappers = []any{
 		(*Value_StringValue)(nil),
 		(*Value_IntValue)(nil),
 		(*Value_BoolValue)(nil),
@@ -489,7 +630,7 @@ func file_authz_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_authz_proto_rawDesc), len(file_authz_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

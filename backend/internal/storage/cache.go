@@ -109,3 +109,8 @@ func (e *CachedEntityProvider) Entities(ctx context.Context, applicationID int64
 	}
 	return out, nil
 }
+
+func (e *CachedEntityProvider) SearchEntities(ctx context.Context, applicationID int64, entityType string) ([]string, error) {
+	// For now, pass through to base provider (DB) without caching specific searches
+	return e.base.SearchEntities(ctx, applicationID, entityType)
+}

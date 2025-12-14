@@ -476,6 +476,32 @@ func (r *EntityRepo) UpsertEntity(ctx context.Context, applicationID int64, enti
 	return nil
 }
 
+// SearchEntities returns IDs of entities of a specific type.
+func (r *EntityRepo) SearchEntities(ctx context.Context, applicationID int64, entityType string) ([]string, error) {
+	rows, err := r.db.Reader().Query(ctx, `
+		SELECT entity_id
+		FROM entities
+		WHERE application_id = $1 AND entity_type = $2
+	`, applicationID, entityType)
+	if err != nil {
+		return nil, fmt.Errorf("search entities: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan entity id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if rows.Err() != nil {
+		return nil, fmt.Errorf("iterate entity ids: %w", rows.Err())
+	}
+	return ids, nil
+}
+
 // GetGroupMemberships returns all groups (parent entities) that a given entity belongs to.
 // This recursively traverses the parent hierarchy to find all group memberships.
 func (r *EntityRepo) GetGroupMemberships(ctx context.Context, applicationID int64, entityType, entityID string) ([]ParentRef, error) {

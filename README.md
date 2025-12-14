@@ -115,6 +115,80 @@ The backend exposes a gRPC service on port `50051` defined in `backend/api/proto
 **Service:** `cedar.v1.AuthorizationService`
 - `Check`: Perform a single authorization check
 - `BatchCheck`: Perform multiple checks in parallel
+- `LookupResources`: Find all resources of a specific type that a principal can access (Entitlements)
+
+#### Integration Examples
+
+**Python**  
+Requires `grpcio` and `grpcio-tools`.
+
+```python
+import grpc
+import authz_pb2
+import authz_pb2_grpc
+
+def check_permission(principal_id, action_id, resource_id):
+    with grpc.insecure_channel('localhost:50051') as channel:
+        stub = authz_pb2_grpc.AuthorizationServiceStub(channel)
+        
+        request = authz_pb2.CheckRequest(
+            application_id="1",
+            principal=authz_pb2.Entity(type="User", id=principal_id),
+            action=authz_pb2.Entity(type="Action", id=action_id),
+            resource=authz_pb2.Entity(type="Document", id=resource_id),
+            context={}
+        )
+        
+        response = stub.Check(request)
+        return response.allowed
+```
+
+**Node.js**  
+Requires `@grpc/grpc-js` and `@grpc/proto-loader`.
+
+```javascript
+const grpc = require('@grpc/grpc-js');
+const protoLoader = require('@grpc/proto-loader');
+
+const packageDefinition = protoLoader.loadSync('authz.proto', {});
+const authzProto = grpc.loadPackageDefinition(packageDefinition).cedar.v1;
+
+const client = new authzProto.AuthorizationService(
+  'localhost:50051',
+  grpc.credentials.createInsecure()
+);
+
+client.Check({
+  application_id: "1",
+  principal: { type: "User", id: "alice" },
+  action: { type: "Action", id: "view" },
+  resource: { type: "Document", id: "doc-123" }
+}, (err, response) => {
+  if (err) console.error(err);
+  else console.log('Allowed:', response.allowed);
+});
+```
+
+**.NET (C#)**  
+Requires `Grpc.Net.Client`.
+
+```csharp
+using Grpc.Net.Client;
+using Cedar.V1;
+
+var channel = GrpcChannel.ForAddress("http://localhost:50051");
+var client = new AuthorizationService.AuthorizationServiceClient(channel);
+
+var reply = await client.CheckAsync(new CheckRequest
+{
+    ApplicationId = "1",
+    Principal = new Entity { Type = "User", Id = "alice" },
+    Action = new Entity { Type = "Action", Id = "view" },
+    Resource = new Entity { Type = "Document", Id = "doc-123" }
+});
+
+Console.WriteLine($"Allowed: {reply.Allowed}");
+```
 
 ### REST Authorization
 
