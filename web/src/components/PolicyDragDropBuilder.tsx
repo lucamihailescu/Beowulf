@@ -10,7 +10,7 @@ import {
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
-import { Card, Space, Typography, Tag, Input, Button, Divider, theme, Alert, Tooltip, Row, Col } from "antd";
+import { Card, Space, Typography, Tag, Input, Button, Divider, theme, Alert, Tooltip, Row, Col, Switch } from "antd";
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -21,6 +21,8 @@ import {
   CopyOutlined,
   QuestionCircleOutlined,
   InfoCircleOutlined,
+  PlusOutlined,
+  TeamOutlined,
 } from "@ant-design/icons";
 
 // Types for policy elements
@@ -40,6 +42,7 @@ interface DraggableItemProps {
   element: PolicyElement;
   isTemplate?: boolean;
   showDescription?: boolean;
+  compact?: boolean;
 }
 
 // Element descriptions for help
@@ -54,7 +57,7 @@ const elementDescriptions: Record<string, string> = {
 };
 
 // Draggable item component
-function DraggableItem({ id, element, isTemplate, showDescription }: DraggableItemProps) {
+function DraggableItem({ id, element, isTemplate, showDescription, compact }: DraggableItemProps) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id,
     data: { element, isTemplate },
@@ -65,16 +68,20 @@ function DraggableItem({ id, element, isTemplate, showDescription }: DraggableIt
     switch (element.type) {
       case "effect":
         return element.value === "permit" ? (
-          <CheckCircleOutlined style={{ color: "#52c41a", fontSize: 18 }} />
+          <CheckCircleOutlined style={{ color: "#52c41a", fontSize: compact ? 14 : 18 }} />
         ) : (
-          <CloseCircleOutlined style={{ color: "#ff4d4f", fontSize: 18 }} />
+          <CloseCircleOutlined style={{ color: "#ff4d4f", fontSize: compact ? 14 : 18 }} />
         );
       case "principal":
-        return <UserOutlined style={{ color: "#1890ff", fontSize: 18 }} />;
+        return element.entityType === "Group" ? (
+          <TeamOutlined style={{ color: "#1890ff", fontSize: compact ? 14 : 18 }} />
+        ) : (
+          <UserOutlined style={{ color: "#1890ff", fontSize: compact ? 14 : 18 }} />
+        );
       case "action":
-        return <ThunderboltOutlined style={{ color: "#722ed1", fontSize: 18 }} />;
+        return <ThunderboltOutlined style={{ color: "#722ed1", fontSize: compact ? 14 : 18 }} />;
       case "resource":
-        return <FileOutlined style={{ color: "#fa8c16", fontSize: 18 }} />;
+        return <FileOutlined style={{ color: "#fa8c16", fontSize: compact ? 14 : 18 }} />;
     }
   };
 
@@ -108,7 +115,6 @@ function DraggableItem({ id, element, isTemplate, showDescription }: DraggableIt
     if (element.type === "effect") {
       return elementDescriptions[element.value];
     }
-    // Check for specific entity type descriptions (User, Group, etc.)
     if (element.entityType && elementDescriptions[element.entityType]) {
       return elementDescriptions[element.entityType];
     }
@@ -121,32 +127,37 @@ function DraggableItem({ id, element, isTemplate, showDescription }: DraggableIt
       {...listeners}
       {...attributes}
       style={{
-        padding: "12px 16px",
+        padding: compact ? "6px 10px" : "12px 16px",
         background: getColor(),
         border: `2px solid ${getBorderColor()}`,
-        borderRadius: 10,
+        borderRadius: compact ? 6 : 10,
         cursor: isDragging ? "grabbing" : "grab",
         opacity: isDragging ? 0.5 : 1,
         display: "flex",
         alignItems: "flex-start",
-        gap: 12,
+        gap: compact ? 8 : 12,
         userSelect: "none",
-        minWidth: isTemplate ? 160 : 120,
+        minWidth: isTemplate ? 160 : (compact ? 100 : 120),
         boxShadow: isDragging ? token.boxShadow : "0 1px 3px rgba(0,0,0,0.08)",
         transition: "box-shadow 0.2s, transform 0.2s",
       }}
     >
-      <div style={{ paddingTop: 2 }}>{getIcon()}</div>
+      <div style={{ paddingTop: compact ? 0 : 2 }}>{getIcon()}</div>
       <div style={{ flex: 1 }}>
-        <Typography.Text strong style={{ fontSize: 13, display: "block", marginBottom: 2 }}>
-          {element.type === "effect" ? element.value.toUpperCase() : element.type.toUpperCase()}
+        <Typography.Text strong style={{ fontSize: compact ? 11 : 13, display: "block", marginBottom: compact ? 0 : 2 }}>
+          {element.type === "effect" ? element.value.toUpperCase() : element.entityType || element.type.toUpperCase()}
         </Typography.Text>
-        {element.entityType && (
+        {element.entityType && !compact && (
           <Typography.Text style={{ fontSize: 11, color: token.colorTextSecondary }}>
             {element.entityType}::{element.entityId}
           </Typography.Text>
         )}
-        {showDescription && (
+        {element.entityType && compact && (
+          <Typography.Text style={{ fontSize: 10, color: token.colorTextSecondary }}>
+            ::{element.entityId}
+          </Typography.Text>
+        )}
+        {showDescription && !compact && (
           <Typography.Text type="secondary" style={{ fontSize: 11, display: "block", marginTop: 4 }}>
             {getDescription()}
           </Typography.Text>
@@ -164,6 +175,50 @@ function DraggableItem({ id, element, isTemplate, showDescription }: DraggableIt
   }
 
   return content;
+}
+
+// Principal item for the multi-principal list
+interface PrincipalItemProps {
+  principal: PolicyElement;
+  onEdit: (entityType: string, entityId: string) => void;
+  onRemove: () => void;
+}
+
+function PrincipalItem({ principal, onEdit, onRemove }: PrincipalItemProps) {
+  const { token } = theme.useToken();
+  
+  return (
+    <div style={{ 
+      display: "flex", 
+      alignItems: "center", 
+      gap: 8, 
+      padding: 8, 
+      background: token.colorBgLayout,
+      borderRadius: 6,
+      border: `1px solid ${token.colorBorder}`,
+    }}>
+      {principal.entityType === "Group" ? (
+        <TeamOutlined style={{ color: "#1890ff" }} />
+      ) : (
+        <UserOutlined style={{ color: "#1890ff" }} />
+      )}
+      <Input
+        size="small"
+        placeholder="Type"
+        value={principal.entityType}
+        onChange={(e) => onEdit(e.target.value, principal.entityId || "")}
+        style={{ width: 80 }}
+      />
+      <Input
+        size="small"
+        placeholder="ID"
+        value={principal.entityId}
+        onChange={(e) => onEdit(principal.entityType || "", e.target.value)}
+        style={{ flex: 1 }}
+      />
+      <Button size="small" danger icon={<DeleteOutlined />} onClick={onRemove} />
+    </div>
+  );
 }
 
 // Drop zone component
@@ -211,8 +266,8 @@ function DropZone({ id, label, helpText, element, onRemove, onEdit, expectedType
     <div
       ref={setNodeRef}
       style={{
-        minHeight: element ? "auto" : 120,
-        padding: 16,
+        minHeight: element ? "auto" : 100,
+        padding: 12,
         border: `2px dashed ${isOver ? token.colorPrimary : token.colorBorder}`,
         borderRadius: 12,
         background: isOver ? token.colorPrimaryBg : getPlaceholderColor(),
@@ -220,39 +275,34 @@ function DropZone({ id, label, helpText, element, onRemove, onEdit, expectedType
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-        <Typography.Text strong style={{ color: getAccentColor() }}>
+        <Typography.Text strong style={{ color: getAccentColor(), fontSize: 12 }}>
           {label}
         </Typography.Text>
         <Tooltip title={helpText}>
-          <QuestionCircleOutlined style={{ color: token.colorTextSecondary, cursor: "help" }} />
+          <QuestionCircleOutlined style={{ color: token.colorTextSecondary, cursor: "help", fontSize: 12 }} />
         </Tooltip>
       </div>
       
       {element ? (
         <Space direction="vertical" size={8} style={{ width: "100%" }}>
-          <DraggableItem id={`placed-${id}`} element={element} />
-          {(element.type === "principal" || element.type === "action" || element.type === "resource") && (
-            <div style={{ background: token.colorBgLayout, padding: 8, borderRadius: 6 }}>
-              <Typography.Text type="secondary" style={{ fontSize: 11, display: "block", marginBottom: 4 }}>
-                Customize:
-              </Typography.Text>
-              <Space.Compact style={{ width: "100%" }}>
-                <Input
-                  size="small"
-                  placeholder="Type"
-                  value={element.entityType}
-                  onChange={(e) => onEdit(e.target.value, element.entityId || "")}
-                  style={{ width: "40%" }}
-                />
-                <Input
-                  size="small"
-                  placeholder="ID"
-                  value={element.entityId}
-                  onChange={(e) => onEdit(element.entityType || "", e.target.value)}
-                  style={{ width: "60%" }}
-                />
-              </Space.Compact>
-            </div>
+          <DraggableItem id={`placed-${id}`} element={element} compact />
+          {(element.type === "action" || element.type === "resource") && (
+            <Space.Compact style={{ width: "100%" }}>
+              <Input
+                size="small"
+                placeholder="Type"
+                value={element.entityType}
+                onChange={(e) => onEdit(e.target.value, element.entityId || "")}
+                style={{ width: "40%" }}
+              />
+              <Input
+                size="small"
+                placeholder="ID"
+                value={element.entityId}
+                onChange={(e) => onEdit(element.entityType || "", e.target.value)}
+                style={{ width: "60%" }}
+              />
+            </Space.Compact>
           )}
           <Button size="small" danger icon={<DeleteOutlined />} onClick={onRemove} block>
             Remove
@@ -261,7 +311,7 @@ function DropZone({ id, label, helpText, element, onRemove, onEdit, expectedType
       ) : (
         <div
           style={{
-            padding: 20,
+            padding: 16,
             textAlign: "center",
             color: token.colorTextSecondary,
             border: `1px dashed ${token.colorBorder}`,
@@ -269,11 +319,90 @@ function DropZone({ id, label, helpText, element, onRemove, onEdit, expectedType
             background: token.colorBgContainer,
           }}
         >
-          <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-            Drag a <strong>{expectedType}</strong> element here
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            Drag here
           </Typography.Text>
         </div>
       )}
+    </div>
+  );
+}
+
+// Multi-principal drop zone
+interface MultiPrincipalDropZoneProps {
+  principals: PolicyElement[];
+  onAdd: (element: PolicyElement) => void;
+  onEdit: (index: number, entityType: string, entityId: string) => void;
+  onRemove: (index: number) => void;
+}
+
+function MultiPrincipalDropZone({ principals, onAdd, onEdit, onRemove }: MultiPrincipalDropZoneProps) {
+  const { isOver, setNodeRef } = useDroppable({ id: "drop-principal" });
+  const { token } = theme.useToken();
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        minHeight: 100,
+        padding: 12,
+        border: `2px dashed ${isOver ? token.colorPrimary : token.colorBorder}`,
+        borderRadius: 12,
+        background: isOver ? token.colorPrimaryBg : "#f0f9ff",
+        transition: "all 0.2s ease",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Typography.Text strong style={{ color: "#1890ff", fontSize: 12 }}>
+            2. Principals (Who?)
+          </Typography.Text>
+          <Tooltip title="Add multiple principals to create separate policies for each. Cedar creates one policy per principal.">
+            <QuestionCircleOutlined style={{ color: token.colorTextSecondary, cursor: "help", fontSize: 12 }} />
+          </Tooltip>
+        </div>
+        {principals.length > 0 && (
+          <Tag color="blue">{principals.length} {principals.length === 1 ? 'principal' : 'principals'}</Tag>
+        )}
+      </div>
+
+      <Space direction="vertical" size={8} style={{ width: "100%" }}>
+        {principals.map((principal, index) => (
+          <PrincipalItem
+            key={principal.id}
+            principal={principal}
+            onEdit={(type, id) => onEdit(index, type, id)}
+            onRemove={() => onRemove(index)}
+          />
+        ))}
+        
+        {principals.length === 0 ? (
+          <div
+            style={{
+              padding: 16,
+              textAlign: "center",
+              color: token.colorTextSecondary,
+              border: `1px dashed ${token.colorBorder}`,
+              borderRadius: 8,
+              background: token.colorBgContainer,
+            }}
+          >
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              Drag User or Group here
+            </Typography.Text>
+            <br />
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+              Add multiple to create batch policies
+            </Typography.Text>
+          </div>
+        ) : (
+          <div style={{ textAlign: "center", padding: 8 }}>
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+              Drag more principals to add them
+            </Typography.Text>
+          </div>
+        )}
+      </Space>
     </div>
   );
 }
@@ -295,7 +424,7 @@ export default function PolicyDragDropBuilder({
 
   const [activeId, setActiveId] = useState<string | null>(null);
   const [effect, setEffect] = useState<PolicyElement | null>(null);
-  const [principal, setPrincipal] = useState<PolicyElement | null>(null);
+  const [principals, setPrincipals] = useState<PolicyElement[]>([]);
   const [action, setAction] = useState<PolicyElement | null>(null);
   const [resource, setResource] = useState<PolicyElement | null>(null);
 
@@ -352,7 +481,7 @@ export default function PolicyDragDropBuilder({
     // Clone the element with a new ID
     const newElement: PolicyElement = {
       ...draggedElement,
-      id: `placed-${Date.now()}`,
+      id: `placed-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     };
 
     // Place in the appropriate drop zone based on type matching
@@ -361,7 +490,9 @@ export default function PolicyDragDropBuilder({
         if (newElement.type === "effect") setEffect(newElement);
         break;
       case "drop-principal":
-        if (newElement.type === "principal") setPrincipal(newElement);
+        if (newElement.type === "principal") {
+          setPrincipals((prev) => [...prev, newElement]);
+        }
         break;
       case "drop-action":
         if (newElement.type === "action") setAction(newElement);
@@ -372,59 +503,75 @@ export default function PolicyDragDropBuilder({
     }
   }
 
-  // Generate Cedar policy text
-  const policyText = useMemo(() => {
-    if (!effect || !principal || !action || !resource) return null;
+  // Generate Cedar policy text(s)
+  const policyTexts = useMemo(() => {
+    if (!effect || principals.length === 0 || !action || !resource) return [];
 
     const escapeCedarString = (s: string) => s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 
-    return `${effect.value} (
-  principal == ${principal.entityType}::"${escapeCedarString(principal.entityId || "")}",
+    return principals.map((principal) => {
+      const operator = principal.entityType === "Group" ? "in" : "==";
+      return `${effect.value} (
+  principal ${operator} ${principal.entityType}::"${escapeCedarString(principal.entityId || "")}",
   action == ${action.entityType}::"${escapeCedarString(action.entityId || "")}",
   resource == ${resource.entityType}::"${escapeCedarString(resource.entityId || "")}"
 );`;
-  }, [effect, principal, action, resource]);
+    });
+  }, [effect, principals, action, resource]);
 
-  const isComplete = effect && principal && action && resource;
-  const filledCount = [effect, principal, action, resource].filter(Boolean).length;
+  const combinedPolicyText = policyTexts.join("\n\n");
+  const isComplete = effect && principals.length > 0 && action && resource;
+  const filledCount = [effect, principals.length > 0, action, resource].filter(Boolean).length;
 
   function handleApply() {
-    if (policyText) {
-      onPolicyGenerated(policyText);
+    if (combinedPolicyText) {
+      onPolicyGenerated(combinedPolicyText);
     }
   }
 
   function handleClear() {
     setEffect(null);
-    setPrincipal(null);
+    setPrincipals([]);
     setAction(null);
     setResource(null);
   }
 
+  function handleEditPrincipal(index: number, entityType: string, entityId: string) {
+    setPrincipals((prev) => 
+      prev.map((p, i) => i === index ? { ...p, entityType, entityId } : p)
+    );
+  }
+
+  function handleRemovePrincipal(index: number) {
+    setPrincipals((prev) => prev.filter((_, i) => i !== index));
+  }
+
   return (
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-      <Space direction="vertical" size={24} style={{ width: "100%" }}>
+      <Space direction="vertical" size={20} style={{ width: "100%" }}>
         {/* Instructions */}
         <Alert
           type="info"
           showIcon
           icon={<InfoCircleOutlined />}
-          message="How to use"
-          description="Drag policy elements from the palette below into the drop zones. Each policy needs an Effect (permit/forbid), Principal (who), Action (what), and Resource (on what). Hover over elements for more details."
+          message="How to use the Visual Policy Builder"
+          description={
+            <span>
+              Drag elements into the drop zones below. <strong>Tip:</strong> Add multiple principals (users/groups) 
+              to create separate policies for each — this is the Cedar way to allow multiple entities access.
+            </span>
+          }
         />
 
         {/* Palette */}
         <div>
-          <Typography.Title level={5} style={{ marginBottom: 12 }}>
-            Policy Elements
-          </Typography.Title>
-          <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-            Drag these elements to build your policy. Hover for descriptions.
-          </Typography.Paragraph>
+          <Typography.Text strong style={{ display: "block", marginBottom: 8 }}>
+            Policy Elements <Typography.Text type="secondary" style={{ fontWeight: "normal" }}>(drag to canvas)</Typography.Text>
+          </Typography.Text>
           
-          <Row gutter={[12, 12]}>
+          <Row gutter={[8, 8]}>
             {templateElements.map((element) => (
-              <Col key={element.id} xs={12} sm={8} md={6} lg={4}>
+              <Col key={element.id}>
                 <DraggableItem id={element.id} element={element} isTemplate showDescription />
               </Col>
             ))}
@@ -432,75 +579,78 @@ export default function PolicyDragDropBuilder({
         </div>
 
         <Divider style={{ margin: 0 }}>
-          <Tag color={isComplete ? "success" : "default"}>
-            {filledCount}/4 elements placed
-          </Tag>
+          <Space>
+            <Tag color={isComplete ? "success" : "default"}>
+              {filledCount}/4 zones filled
+            </Tag>
+            {principals.length > 1 && (
+              <Tag color="blue">
+                {principals.length} policies will be created
+              </Tag>
+            )}
+          </Space>
         </Divider>
 
         {/* Drop Zones */}
-        <div>
-          <Typography.Title level={5} style={{ marginBottom: 12 }}>
-            Policy Canvas
-          </Typography.Title>
-          
-          <Row gutter={[16, 16]}>
-            <Col xs={24} sm={12} md={6}>
-              <DropZone
-                id="drop-effect"
-                label="1. Effect"
-                helpText="Choose whether this policy permits or forbids the action"
-                element={effect}
-                onRemove={() => setEffect(null)}
-                onEdit={() => {}}
-                expectedType="effect"
-              />
-            </Col>
-            <Col xs={24} sm={12} md={6}>
-              <DropZone
-                id="drop-principal"
-                label="2. Principal"
-                helpText="The entity (user, group, or service) making the request"
-                element={principal}
-                onRemove={() => setPrincipal(null)}
-                onEdit={(type, id) =>
-                  setPrincipal((prev) => (prev ? { ...prev, entityType: type, entityId: id } : null))
-                }
-                expectedType="principal"
-              />
-            </Col>
-            <Col xs={24} sm={12} md={6}>
-              <DropZone
-                id="drop-action"
-                label="3. Action"
-                helpText="The operation being requested (e.g., view, edit, delete)"
-                element={action}
-                onRemove={() => setAction(null)}
-                onEdit={(type, id) =>
-                  setAction((prev) => (prev ? { ...prev, entityType: type, entityId: id } : null))
-                }
-                expectedType="action"
-              />
-            </Col>
-            <Col xs={24} sm={12} md={6}>
-              <DropZone
-                id="drop-resource"
-                label="4. Resource"
-                helpText="The target of the action (e.g., a document or folder)"
-                element={resource}
-                onRemove={() => setResource(null)}
-                onEdit={(type, id) =>
-                  setResource((prev) => (prev ? { ...prev, entityType: type, entityId: id } : null))
-                }
-                expectedType="resource"
-              />
-            </Col>
-          </Row>
-        </div>
+        <Row gutter={[12, 12]}>
+          <Col xs={24} sm={12} md={6}>
+            <DropZone
+              id="drop-effect"
+              label="1. Effect"
+              helpText="Choose whether this policy permits or forbids the action"
+              element={effect}
+              onRemove={() => setEffect(null)}
+              onEdit={() => {}}
+              expectedType="effect"
+            />
+          </Col>
+          <Col xs={24} sm={12} md={6}>
+            <MultiPrincipalDropZone
+              principals={principals}
+              onAdd={(element) => setPrincipals((prev) => [...prev, element])}
+              onEdit={handleEditPrincipal}
+              onRemove={handleRemovePrincipal}
+            />
+          </Col>
+          <Col xs={24} sm={12} md={6}>
+            <DropZone
+              id="drop-action"
+              label="3. Action"
+              helpText="The operation being requested (e.g., view, edit, delete)"
+              element={action}
+              onRemove={() => setAction(null)}
+              onEdit={(type, id) =>
+                setAction((prev) => (prev ? { ...prev, entityType: type, entityId: id } : null))
+              }
+              expectedType="action"
+            />
+          </Col>
+          <Col xs={24} sm={12} md={6}>
+            <DropZone
+              id="drop-resource"
+              label="4. Resource"
+              helpText="The target of the action (e.g., a document or folder)"
+              element={resource}
+              onRemove={() => setResource(null)}
+              onEdit={(type, id) =>
+                setResource((prev) => (prev ? { ...prev, entityType: type, entityId: id } : null))
+              }
+              expectedType="resource"
+            />
+          </Col>
+        </Row>
 
         {/* Preview */}
         <Card
           size="small"
-          title="Generated Cedar Policy"
+          title={
+            <Space>
+              <span>Generated Cedar {policyTexts.length > 1 ? "Policies" : "Policy"}</span>
+              {policyTexts.length > 1 && (
+                <Tag color="blue">{policyTexts.length} policies</Tag>
+              )}
+            </Space>
+          }
           extra={
             <Space>
               <Button size="small" onClick={handleClear} disabled={filledCount === 0}>
@@ -513,34 +663,45 @@ export default function PolicyDragDropBuilder({
                 onClick={handleApply}
                 disabled={!isComplete}
               >
-                Use This Policy
+                Use {policyTexts.length > 1 ? "These Policies" : "This Policy"}
               </Button>
             </Space>
           }
         >
-          {policyText ? (
+          {policyTexts.length > 0 ? (
             <pre
               style={{
                 padding: 16,
                 background: token.colorBgLayout,
                 borderRadius: 8,
                 margin: 0,
-                fontSize: 13,
+                fontSize: 12,
                 fontFamily: "'Fira Code', 'Monaco', 'Consolas', monospace",
                 overflow: "auto",
+                maxHeight: 300,
                 border: `1px solid ${token.colorBorder}`,
               }}
             >
-              {policyText}
+              {combinedPolicyText}
             </pre>
           ) : (
             <div style={{ padding: 24, textAlign: "center" }}>
               <Typography.Text type="secondary">
-                Complete all 4 drop zones to generate a policy
+                Fill all drop zones to generate policies. Add multiple principals to create batch policies.
               </Typography.Text>
             </div>
           )}
         </Card>
+
+        {/* Multi-policy explanation */}
+        {principals.length > 1 && (
+          <Alert
+            type="success"
+            showIcon
+            message={`Creating ${principals.length} separate policies`}
+            description="Cedar evaluates all policies — if ANY permit policy matches, the request is allowed. This is the recommended way to grant access to multiple users or groups."
+          />
+        )}
       </Space>
 
       {/* Drag Overlay */}
