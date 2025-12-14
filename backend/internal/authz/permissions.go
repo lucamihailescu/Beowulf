@@ -101,9 +101,10 @@ func (s *PermissionsService) ListPermissions(ctx context.Context, applicationID 
 
 		// Track effective actions (permit - forbid)
 		for _, action := range p.Actions {
-			if p.Effect == "permit" {
+			switch p.Effect {
+			case "permit":
 				effectiveActionsMap[action] = true
-			} else if p.Effect == "forbid" {
+			case "forbid":
 				forbiddenActionsMap[action] = true
 			}
 		}

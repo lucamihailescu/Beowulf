@@ -37,7 +37,7 @@ func (s *Server) Start() error {
 
 	grpcServer := grpc.NewServer()
 	authzv1.RegisterAuthorizationServiceServer(grpcServer, s)
-	
+
 	// Enable reflection for tools like grpcurl
 	reflection.Register(grpcServer)
 
