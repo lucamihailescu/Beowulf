@@ -1,0 +1,96 @@
+# ========================
+# Go
+# ========================
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage/
+vendor/
+
+# Go workspace
+go.work
+go.work.sum
+
+# ========================
+# Node.js / Frontend
+# ========================
+node_modules/
+dist/
+build/
+.cache/
+
+# TypeScript
+*.tsbuildinfo
+
+# Vite
+.vite/
+
+# ========================
+# Environment
+# ========================
+.env
+.env.local
+.env.*.local
+!.env.example
+!env.example
+
+# ========================
+# IDE / Editors
+# ========================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# ========================
+# OS
+# ========================
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ========================
+# Logs
+# ========================
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ========================
+# Testing / Coverage
+# ========================
+coverage/
+*.cover
+*.coverprofile
+.nyc_output/
+htmlcov/
+
+# ========================
+# Docker
+# ========================
+*.pid
+*.seed
+*.pid.lock
+
+# ========================
+# Temporary files
+# ========================
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak

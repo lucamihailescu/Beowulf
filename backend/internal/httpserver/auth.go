@@ -1,0 +1,196 @@
+package httpserver
+
+import (
+	"context"
+	"encoding/json"
+	"log"
+	"net/http"
+	"strings"
+
+	"cedar/internal/config"
+)
+
+// UserContext contains authenticated user information.
+type UserContext struct {
+	ID     string   `json:"id"`     // User principal name or email
+	Name   string   `json:"name"`   // Display name
+	Email  string   `json:"email"`  // Email address
+	Groups []string `json:"groups"` // Group memberships from token
+}
+
+// contextKey is a custom type for context keys to avoid collisions.
+type contextKey string
+
+const (
+	// UserContextKey is the context key for storing user information.
+	UserContextKey contextKey = "user"
+)
+
+// GetUserFromContext retrieves the authenticated user from the request context.
+func GetUserFromContext(ctx context.Context) *UserContext {
+	user, ok := ctx.Value(UserContextKey).(*UserContext)
+	if !ok {
+		return nil
+	}
+	return user
+}
+
+// AuthMiddleware provides authentication middleware based on configuration.
+type AuthMiddleware struct {
+	mode           string
+	jwtValidator   *JWTValidator
+	kerbValidator  *KerberosValidator
+}
+
+// NewAuthMiddleware creates a new authentication middleware.
+func NewAuthMiddleware(cfg config.Config) (*AuthMiddleware, error) {
+	am := &AuthMiddleware{
+		mode: strings.ToLower(cfg.AuthMode),
+	}
+
+	switch am.mode {
+	case "jwt":
+		if cfg.AzureTenantID == "" || cfg.AzureClientID == "" {
+			log.Println("Warning: JWT auth mode requires AZURE_TENANT_ID and AZURE_CLIENT_ID")
+		}
+		am.jwtValidator = NewJWTValidator(cfg.AzureTenantID, cfg.AzureClientID, cfg.AzureAudience)
+
+	case "kerberos":
+		if cfg.KerberosKeytab == "" || cfg.KerberosService == "" {
+			log.Println("Warning: Kerberos auth mode requires KERBEROS_KEYTAB and KERBEROS_SERVICE")
+		} else {
+			kv, err := NewKerberosValidator(cfg.KerberosKeytab, cfg.KerberosService)
+			if err != nil {
+				log.Printf("Warning: Failed to initialize Kerberos validator: %v", err)
+			} else {
+				am.kerbValidator = kv
+			}
+		}
+
+	case "none", "":
+		log.Println("Authentication disabled (AUTH_MODE=none)")
+
+	default:
+		log.Printf("Unknown auth mode: %s, falling back to none", cfg.AuthMode)
+		am.mode = "none"
+	}
+
+	return am, nil
+}
+
+// Middleware returns an http.Handler middleware that performs authentication.
+func (am *AuthMiddleware) Middleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip auth for health check
+		if r.URL.Path == "/health" || r.URL.Path == "/healthz" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// If auth is disabled, create anonymous user and continue
+		if am.mode == "none" || am.mode == "" {
+			ctx := context.WithValue(r.Context(), UserContextKey, &UserContext{
+				ID:   "anonymous",
+				Name: "Anonymous User",
+			})
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+
+		var user *UserContext
+		var err error
+
+		switch am.mode {
+		case "jwt":
+			user, err = am.validateJWT(r)
+		case "kerberos":
+			user, err = am.validateKerberos(r)
+		}
+
+		if err != nil {
+			am.handleAuthError(w, r, err)
+			return
+		}
+
+		if user == nil {
+			am.handleAuthError(w, r, nil)
+			return
+		}
+
+		// Add user to context
+		ctx := context.WithValue(r.Context(), UserContextKey, user)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// validateJWT validates a JWT Bearer token.
+func (am *AuthMiddleware) validateJWT(r *http.Request) (*UserContext, error) {
+	token := ExtractBearerToken(r)
+	if token == "" {
+		return nil, nil // No token provided
+	}
+
+	if am.jwtValidator == nil {
+		return nil, nil
+	}
+
+	return am.jwtValidator.ValidateToken(r.Context(), token)
+}
+
+// validateKerberos validates a Kerberos/SPNEGO token.
+func (am *AuthMiddleware) validateKerberos(r *http.Request) (*UserContext, error) {
+	if am.kerbValidator == nil {
+		return nil, nil
+	}
+
+	if !IsNegotiateAuth(r) {
+		return nil, nil // No Negotiate token provided
+	}
+
+	user, _, err := am.kerbValidator.ValidateRequest(r)
+	if err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
+// handleAuthError sends an appropriate authentication error response.
+func (am *AuthMiddleware) handleAuthError(w http.ResponseWriter, _ *http.Request, err error) {
+	w.Header().Set("Content-Type", "application/json")
+
+	switch am.mode {
+	case "jwt":
+		w.Header().Set("WWW-Authenticate", "Bearer")
+	case "kerberos":
+		w.Header().Set("WWW-Authenticate", "Negotiate")
+	}
+
+	w.WriteHeader(http.StatusUnauthorized)
+
+	errMsg := "Authentication required"
+	if err != nil {
+		errMsg = err.Error()
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"error": errMsg,
+	})
+}
+
+// RequireAuth creates a middleware that requires authentication.
+// This is useful for routes that should never be accessed anonymously.
+func RequireAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user := GetUserFromContext(r.Context())
+		if user == nil || user.ID == "anonymous" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": "Authentication required",
+			})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+

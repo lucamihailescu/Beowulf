@@ -1,0 +1,88 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cedar}
+      POSTGRES_USER: ${POSTGRES_USER:-cedar}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cedar}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cedar} -d ${POSTGRES_DB:-cedar}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      APP_PORT: ${APP_PORT:-8080}
+      DATABASE_URL: ${DATABASE_URL:-postgres://cedar:cedar@db:5432/cedar?sslmode=disable}
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      # Authentication settings
+      AUTH_MODE: ${AUTH_MODE:-none}
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
+      AZURE_AUDIENCE: ${AZURE_AUDIENCE:-}
+      KERBEROS_KEYTAB: ${KERBEROS_KEYTAB:-}
+      KERBEROS_SERVICE: ${KERBEROS_SERVICE:-}
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    depends_on:
+      - db
+      - redis
+
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: builder
+    working_dir: /app
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://cedar:cedar@db:5432/cedar?sslmode=disable}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["go", "run", "./cmd/migrate"]
+
+  seed:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: builder
+    working_dir: /app
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://cedar:cedar@db:5432/cedar?sslmode=disable}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["go", "run", "./cmd/seed"]
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
+        VITE_AUTH_MODE: ${AUTH_MODE:-none}
+        VITE_AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
+        VITE_AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
+        VITE_REDIRECT_URI: ${VITE_REDIRECT_URI:-}
+    ports:
+      - "${WEB_PORT:-5173}:80"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
