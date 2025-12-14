@@ -21,7 +21,7 @@ func main() {
 	cfg := config.Load()
 	ctx := context.Background()
 
-	db, err := storage.NewPostgres(ctx, cfg.DBURL)
+	db, err := storage.NewDB(ctx, cfg.DBURL, cfg.DBReadURL, cfg.DBMaxConns, cfg.DBMinConns)
 	if err != nil {
 		log.Fatalf("failed to connect to postgres: %v", err)
 	}

@@ -20,7 +20,7 @@ func main() {
 	cfg := config.Load()
 	ctx := context.Background()
 
-	db, err := storage.NewPostgres(ctx, cfg.DBURL)
+	db, err := storage.NewDB(ctx, cfg.DBURL, "", 0, 0)
 	if err != nil {
 		log.Fatalf("failed to connect to postgres: %v", err)
 	}
@@ -33,7 +33,7 @@ func main() {
 
 	for _, f := range files {
 		log.Printf("applying migration %s", f.name)
-		if _, err := db.Exec(ctx, f.content); err != nil {
+		if _, err := db.Writer().Exec(ctx, f.content); err != nil {
 			log.Fatalf("apply %s: %v", f.name, err)
 		}
 	}

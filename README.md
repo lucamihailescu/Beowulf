@@ -9,7 +9,7 @@ A full-stack implementation for managing [Cedar](https://github.com/cedar-policy
 - **Cedar Policy Evaluation** — Real-time authorization using [cedar-go](https://github.com/cedar-policy/cedar-go)
 - **Policy Versioning** — Create and manage multiple policy versions with activation control
 - **Entity Management** — Store and manage Cedar entities with hierarchical parent relationships
-- **Authorization API** — RESTful endpoint for policy decision requests
+- **Authorization API** — RESTful and gRPC endpoints for policy decision requests
 
 ### Namespace Management
 - **Shared Namespaces** — Group related applications under common namespaces
@@ -28,10 +28,11 @@ A full-stack implementation for managing [Cedar](https://github.com/cedar-policy
 - **Filterable Logs** — Query audit logs by application, action type, or decision
 - **Compliance Ready** — Comprehensive audit trail for SOC2, HIPAA, and other compliance requirements
 
-### Performance
+### Performance & Scalability
 - **Redis Caching** — Cache policies and entities for fast authorization decisions
 - **Cache Invalidation** — Automatic invalidation when policies or entities change
-- **Connection Pooling** — PostgreSQL connection pooling for high throughput
+- **Connection Pooling** — Optimized PostgreSQL connection pooling with support for **Read Replicas**
+- **gRPC API** — High-performance Protobuf API for internal service-to-service communication
 
 ## Architecture
 
@@ -39,7 +40,7 @@ A full-stack implementation for managing [Cedar](https://github.com/cedar-policy
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │                 │     │                 │     │                 │
 │   Web Portal    │────▶│   Backend API   │────▶│   PostgreSQL    │
-│   (React/Vite)  │     │   (Go/Chi)      │     │                 │
+│   (React/Vite)  │     │   (Go/Chi/gRPC) │     │  (Primary/Read) │
 │                 │     │                 │     └─────────────────┘
 └─────────────────┘     │                 │
                         │                 │     ┌─────────────────┐
@@ -49,9 +50,9 @@ A full-stack implementation for managing [Cedar](https://github.com/cedar-policy
 ```
 
 ### Tech Stack
-- **Backend**: Go 1.23+, Chi router, pgx (PostgreSQL driver), cedar-go
-- **Frontend**: React 18, TypeScript, Vite, Ant Design
-- **Database**: PostgreSQL 16
+- **Backend**: Go 1.23+, Chi router, pgx (PostgreSQL driver), cedar-go, gRPC/Protobuf
+- **Frontend**: React 18, TypeScript, Vite 7, Ant Design (Dependencies pinned for stability)
+- **Database**: PostgreSQL 16 (with Read Replica support)
 - **Cache**: Redis 7
 - **Containerization**: Docker, Docker Compose
 
@@ -87,7 +88,8 @@ A full-stack implementation for managing [Cedar](https://github.com/cedar-policy
 
 5. **Access the application**
    - Web Portal: http://localhost:5173
-   - Backend API: http://localhost:8080
+   - Backend REST API: http://localhost:8080
+   - Backend gRPC API: localhost:50051
    - Health Check: http://localhost:8080/health
 
 ### Environment Variables
@@ -96,6 +98,9 @@ A full-stack implementation for managing [Cedar](https://github.com/cedar-policy
 |----------|---------|-------------|
 | `APP_PORT` | `8080` | Backend API port |
 | `DATABASE_URL` | `postgres://cedar:cedar@db:5432/cedar?sslmode=disable` | PostgreSQL connection string |
+| `DATABASE_READ_URL` | `` | Optional PostgreSQL read replica connection string |
+| `DB_MAX_CONNS` | `25` | Maximum database connections per pool |
+| `DB_MIN_CONNS` | `5` | Minimum idle database connections |
 | `REDIS_ADDR` | `localhost:6379` | Redis address |
 | `REDIS_PASSWORD` | `` | Redis password (optional) |
 | `AUTHZ_CACHE_TTL` | `5s` | Cache TTL for policies/entities |
@@ -104,7 +109,14 @@ A full-stack implementation for managing [Cedar](https://github.com/cedar-policy
 
 ## API Reference
 
-### Authorization
+### gRPC API
+The backend exposes a gRPC service on port `50051` defined in `backend/api/proto/v1/authz.proto`.
+
+**Service:** `cedar.v1.AuthorizationService`
+- `Check`: Perform a single authorization check
+- `BatchCheck`: Perform multiple checks in parallel
+
+### REST Authorization
 
 #### Evaluate Authorization Request
 ```http
@@ -256,7 +268,7 @@ cp .env.example .env  # Create and configure .env file
 # Run migrations
 go run ./cmd/migrate
 
-# Start the server
+# Start the server (REST on 8080, gRPC on 50051)
 go run ./cmd/server
 ```
 
@@ -350,4 +362,3 @@ This project is licensed under the Apache-2.0 License.
 - [Cedar Language Documentation](https://docs.cedarpolicy.com/)
 - [Cedar Policy GitHub](https://github.com/cedar-policy/cedar)
 - [cedar-go Library](https://github.com/cedar-policy/cedar-go)
-

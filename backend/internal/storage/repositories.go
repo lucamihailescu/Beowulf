@@ -12,7 +12,6 @@ import (
 
 	cedar "github.com/cedar-policy/cedar-go"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Namespace represents a Cedar namespace that can be shared across applications.
@@ -26,17 +25,17 @@ type Namespace struct {
 
 // NamespaceRepo manages namespace records.
 type NamespaceRepo struct {
-	db *pgxpool.Pool
+	db *DB
 }
 
 // NewNamespaceRepo constructs a namespace repository.
-func NewNamespaceRepo(db *pgxpool.Pool) *NamespaceRepo {
+func NewNamespaceRepo(db *DB) *NamespaceRepo {
 	return &NamespaceRepo{db: db}
 }
 
 // Create inserts a new namespace.
 func (r *NamespaceRepo) Create(ctx context.Context, name, description string) (int64, error) {
-	row := r.db.QueryRow(ctx, `
+	row := r.db.Writer().QueryRow(ctx, `
 		INSERT INTO namespaces (name, description)
 		VALUES ($1, $2)
 		RETURNING id
@@ -54,7 +53,7 @@ func (r *NamespaceRepo) Create(ctx context.Context, name, description string) (i
 
 // List returns all namespaces.
 func (r *NamespaceRepo) List(ctx context.Context) ([]Namespace, error) {
-	rows, err := r.db.Query(ctx, `
+	rows, err := r.db.Reader().Query(ctx, `
 		SELECT id, name, COALESCE(description, ''), created_at, updated_at
 		FROM namespaces
 		ORDER BY name ASC
@@ -80,7 +79,7 @@ func (r *NamespaceRepo) List(ctx context.Context) ([]Namespace, error) {
 
 // GetByID returns a namespace by ID.
 func (r *NamespaceRepo) GetByID(ctx context.Context, id int64) (*Namespace, error) {
-	row := r.db.QueryRow(ctx, `
+	row := r.db.Reader().QueryRow(ctx, `
 		SELECT id, name, COALESCE(description, ''), created_at, updated_at
 		FROM namespaces WHERE id = $1
 	`, id)
@@ -93,7 +92,7 @@ func (r *NamespaceRepo) GetByID(ctx context.Context, id int64) (*Namespace, erro
 
 // GetByName returns a namespace by name.
 func (r *NamespaceRepo) GetByName(ctx context.Context, name string) (*Namespace, error) {
-	row := r.db.QueryRow(ctx, `
+	row := r.db.Reader().QueryRow(ctx, `
 		SELECT id, name, COALESCE(description, ''), created_at, updated_at
 		FROM namespaces WHERE name = $1
 	`, name)
@@ -119,17 +118,17 @@ type Application struct {
 
 // ApplicationRepo manages application records.
 type ApplicationRepo struct {
-	db *pgxpool.Pool
+	db *DB
 }
 
 // NewApplicationRepo constructs an application repository.
-func NewApplicationRepo(db *pgxpool.Pool) *ApplicationRepo {
+func NewApplicationRepo(db *DB) *ApplicationRepo {
 	return &ApplicationRepo{db: db}
 }
 
 // Create inserts a new application with a namespace reference.
 func (r *ApplicationRepo) Create(ctx context.Context, name string, namespaceID int64, description string) (int64, error) {
-	row := r.db.QueryRow(ctx, `
+	row := r.db.Writer().QueryRow(ctx, `
 		INSERT INTO applications (name, namespace_id, description)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (name) DO UPDATE SET namespace_id = EXCLUDED.namespace_id, description = EXCLUDED.description
@@ -153,7 +152,7 @@ func (r *ApplicationRepo) Create(ctx context.Context, name string, namespaceID i
 
 // List returns all applications with their namespace names.
 func (r *ApplicationRepo) List(ctx context.Context) ([]Application, error) {
-	rows, err := r.db.Query(ctx, `
+	rows, err := r.db.Reader().Query(ctx, `
 		SELECT a.id, a.name, COALESCE(a.namespace_id, 0), COALESCE(n.name, a.namespace, ''), COALESCE(a.description, ''), a.created_at
 		FROM applications a
 		LEFT JOIN namespaces n ON a.namespace_id = n.id
@@ -180,7 +179,7 @@ func (r *ApplicationRepo) List(ctx context.Context) ([]Application, error) {
 
 // PolicyRepo fetches active policies for applications.
 type PolicyRepo struct {
-	db *pgxpool.Pool
+	db *DB
 }
 
 // PolicySummary is a compact view of a policy and its version status.
@@ -208,13 +207,13 @@ type PolicyDetails struct {
 }
 
 // NewPolicyRepo constructs a policy repository.
-func NewPolicyRepo(db *pgxpool.Pool) *PolicyRepo {
+func NewPolicyRepo(db *DB) *PolicyRepo {
 	return &PolicyRepo{db: db}
 }
 
 // ListPolicies returns policies for an application with active/latest version info.
 func (r *PolicyRepo) ListPolicies(ctx context.Context, applicationID int64) ([]PolicySummary, error) {
-	rows, err := r.db.Query(ctx, `
+	rows, err := r.db.Reader().Query(ctx, `
 		SELECT
 			p.id,
 			p.name,
@@ -250,7 +249,7 @@ func (r *PolicyRepo) ListPolicies(ctx context.Context, applicationID int64) ([]P
 
 // GetPolicy returns policy details including the active and latest policy text.
 func (r *PolicyRepo) GetPolicy(ctx context.Context, applicationID, policyID int64) (PolicyDetails, error) {
-	row := r.db.QueryRow(ctx, `
+	row := r.db.Reader().QueryRow(ctx, `
 		SELECT
 			p.id,
 			p.name,
@@ -274,7 +273,7 @@ func (r *PolicyRepo) GetPolicy(ctx context.Context, applicationID, policyID int6
 
 // UpsertPolicyWithVersion adds a policy version and optionally activates it.
 func (r *PolicyRepo) UpsertPolicyWithVersion(ctx context.Context, applicationID int64, name, description, policyText string, activate bool) (int64, int, error) {
-	tx, err := r.db.Begin(ctx)
+	tx, err := r.db.Writer().Begin(ctx)
 	if err != nil {
 		return 0, 0, fmt.Errorf("begin tx: %w", err)
 	}
@@ -323,7 +322,7 @@ func (r *PolicyRepo) UpsertPolicyWithVersion(ctx context.Context, applicationID 
 
 // ActivePolicies returns active policy texts for the application.
 func (r *PolicyRepo) ActivePolicies(ctx context.Context, applicationID int64) ([]authz.PolicyText, error) {
-	rows, err := r.db.Query(ctx, `
+	rows, err := r.db.Reader().Query(ctx, `
 		SELECT pv.id::text AS id, pv.policy_text
 		FROM policy_versions pv
 		JOIN policies p ON pv.policy_id = p.id
@@ -350,11 +349,11 @@ func (r *PolicyRepo) ActivePolicies(ctx context.Context, applicationID int64) ([
 
 // EntityRepo fetches entities for applications.
 type EntityRepo struct {
-	db *pgxpool.Pool
+	db *DB
 }
 
 // NewEntityRepo constructs an entity repository.
-func NewEntityRepo(db *pgxpool.Pool) *EntityRepo {
+func NewEntityRepo(db *DB) *EntityRepo {
 	return &EntityRepo{db: db}
 }
 
@@ -366,7 +365,7 @@ type ParentRef struct {
 
 // Entities loads all entities for an application as cedar.EntityMap.
 func (r *EntityRepo) Entities(ctx context.Context, applicationID int64) (cedar.EntityMap, error) {
-	rows, err := r.db.Query(ctx, `
+	rows, err := r.db.Reader().Query(ctx, `
 		SELECT e.entity_type, e.entity_id, e.attributes,
 		       COALESCE(json_agg(json_build_object('type', ep.parent_type, 'id', ep.parent_id)) FILTER (WHERE ep.parent_type IS NOT NULL), '[]') AS parents
 		FROM entities e
@@ -440,7 +439,7 @@ func (r *EntityRepo) UpsertEntity(ctx context.Context, applicationID int64, enti
 		attrs = json.RawMessage("{}")
 	}
 
-	tx, err := r.db.Begin(ctx)
+	tx, err := r.db.Writer().Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
@@ -481,7 +480,7 @@ func (r *EntityRepo) UpsertEntity(ctx context.Context, applicationID int64, enti
 // This recursively traverses the parent hierarchy to find all group memberships.
 func (r *EntityRepo) GetGroupMemberships(ctx context.Context, applicationID int64, entityType, entityID string) ([]ParentRef, error) {
 	// Use a recursive CTE to find all parent groups
-	rows, err := r.db.Query(ctx, `
+	rows, err := r.db.Reader().Query(ctx, `
 		WITH RECURSIVE parent_tree AS (
 			-- Base case: direct parents of the entity
 			SELECT ep.parent_type, ep.parent_id, 1 AS depth
@@ -521,7 +520,7 @@ func (r *EntityRepo) GetGroupMemberships(ctx context.Context, applicationID int6
 
 // ListEntitiesRaw returns all entities for an application as a list of EntityRecord.
 func (r *EntityRepo) ListEntitiesRaw(ctx context.Context, applicationID int64) ([]EntityRecord, error) {
-	rows, err := r.db.Query(ctx, `
+	rows, err := r.db.Reader().Query(ctx, `
 		SELECT e.entity_type, e.entity_id, e.attributes,
 		       COALESCE(json_agg(json_build_object('type', ep.parent_type, 'id', ep.parent_id)) FILTER (WHERE ep.parent_type IS NOT NULL), '[]') AS parents
 		FROM entities e
@@ -569,7 +568,7 @@ type EntityRecord struct {
 
 // SchemaRepo manages Cedar schema records per application.
 type SchemaRepo struct {
-	db *pgxpool.Pool
+	db *DB
 }
 
 // Schema represents a Cedar schema version.
@@ -583,13 +582,13 @@ type Schema struct {
 }
 
 // NewSchemaRepo constructs a schema repository.
-func NewSchemaRepo(db *pgxpool.Pool) *SchemaRepo {
+func NewSchemaRepo(db *DB) *SchemaRepo {
 	return &SchemaRepo{db: db}
 }
 
 // CreateSchema inserts a new schema version for an application.
 func (r *SchemaRepo) CreateSchema(ctx context.Context, applicationID int64, schemaText string, activate bool) (int64, int, error) {
-	tx, err := r.db.Begin(ctx)
+	tx, err := r.db.Writer().Begin(ctx)
 	if err != nil {
 		return 0, 0, fmt.Errorf("begin tx: %w", err)
 	}
@@ -627,7 +626,7 @@ func (r *SchemaRepo) CreateSchema(ctx context.Context, applicationID int64, sche
 
 // GetActiveSchema returns the currently active schema for an application.
 func (r *SchemaRepo) GetActiveSchema(ctx context.Context, applicationID int64) (*Schema, error) {
-	row := r.db.QueryRow(ctx, `
+	row := r.db.Reader().QueryRow(ctx, `
 		SELECT id, application_id, version, schema_text, active, created_at
 		FROM schemas
 		WHERE application_id = $1 AND active = TRUE
@@ -647,7 +646,7 @@ func (r *SchemaRepo) GetActiveSchema(ctx context.Context, applicationID int64) (
 
 // ListSchemas returns all schema versions for an application.
 func (r *SchemaRepo) ListSchemas(ctx context.Context, applicationID int64) ([]Schema, error) {
-	rows, err := r.db.Query(ctx, `
+	rows, err := r.db.Reader().Query(ctx, `
 		SELECT id, application_id, version, schema_text, active, created_at
 		FROM schemas
 		WHERE application_id = $1
@@ -674,7 +673,7 @@ func (r *SchemaRepo) ListSchemas(ctx context.Context, applicationID int64) ([]Sc
 
 // ActivateSchema activates a specific schema version.
 func (r *SchemaRepo) ActivateSchema(ctx context.Context, applicationID int64, version int) error {
-	tx, err := r.db.Begin(ctx)
+	tx, err := r.db.Writer().Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
@@ -700,7 +699,7 @@ func (r *SchemaRepo) ActivateSchema(ctx context.Context, applicationID int64, ve
 
 // AuditRepo manages audit log records.
 type AuditRepo struct {
-	db *pgxpool.Pool
+	db *DB
 }
 
 // AuditLog represents an audit log entry.
@@ -725,7 +724,7 @@ type AuditFilter struct {
 }
 
 // NewAuditRepo constructs an audit repository.
-func NewAuditRepo(db *pgxpool.Pool) *AuditRepo {
+func NewAuditRepo(db *DB) *AuditRepo {
 	return &AuditRepo{db: db}
 }
 
@@ -740,7 +739,7 @@ func (r *AuditRepo) Log(ctx context.Context, applicationID *int64, actor, action
 		}
 	}
 
-	_, err = r.db.Exec(ctx, `
+	_, err = r.db.Writer().Exec(ctx, `
 		INSERT INTO audit_logs (application_id, actor, action, target, decision, context)
 		VALUES ($1, $2, $3, $4, $5, $6)
 	`, applicationID, actor, action, target, decision, ctxJSON)
@@ -776,7 +775,7 @@ func (r *AuditRepo) List(ctx context.Context, filter AuditFilter) ([]AuditLog, i
 	// Count total
 	var total int
 	countQuery := "SELECT COUNT(*) " + baseQuery
-	if err := r.db.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := r.db.Reader().QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count audit logs: %w", err)
 	}
 
@@ -793,7 +792,7 @@ func (r *AuditRepo) List(ctx context.Context, filter AuditFilter) ([]AuditLog, i
 	selectQuery := fmt.Sprintf(`SELECT id, application_id, COALESCE(actor, ''), action, COALESCE(target, ''), COALESCE(decision, ''), context, created_at %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`, baseQuery, argIdx, argIdx+1)
 	args = append(args, limit, offset)
 
-	rows, err := r.db.Query(ctx, selectQuery, args...)
+	rows, err := r.db.Reader().Query(ctx, selectQuery, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("query audit logs: %w", err)
 	}
