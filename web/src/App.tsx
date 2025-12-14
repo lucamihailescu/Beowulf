@@ -16,6 +16,7 @@ import {
 import Dashboard from "./pages/Dashboard";
 import Applications from "./pages/Applications";
 import ApplicationDetails from "./pages/ApplicationDetails";
+import NamespaceDetails from "./pages/NamespaceDetails";
 import Policies from "./pages/Policies";
 import Audit from "./pages/Audit";
 import Admin from "./pages/Admin";
@@ -234,6 +235,7 @@ function AppShell() {
               <Route path="/" element={<Dashboard />} />
               <Route path="/applications" element={<Applications />} />
               <Route path="/applications/:id" element={<ApplicationDetails />} />
+              <Route path="/namespaces/:id" element={<NamespaceDetails />} />
               <Route path="/policies" element={<Policies />} />
               <Route path="/audit" element={<Audit />} />
               <Route path="/admin" element={<Admin />} />
