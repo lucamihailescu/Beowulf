@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Checkbox, Input, Modal, Select, Space, Table, Typography } from "antd";
-import { API_BASE_URL, api, type Application, type AuthorizeResponse, type CedarEntity, type PolicyDetails, type PolicySummary } from "../api";
+import { Alert, Button, Card, Checkbox, Col, Collapse, Input, Modal, Row, Select, Space, Table, Tabs, Tag, Typography, theme } from "antd";
+import { FileTextOutlined, PlusOutlined, ThunderboltOutlined, EyeOutlined } from "@ant-design/icons";
+import { api, type Application, type AuthorizeResponse, type CedarEntity, type PolicyDetails, type PolicySummary } from "../api";
+import PolicyDragDropBuilder from "../components/PolicyDragDropBuilder";
 
 const DEFAULT_POLICY = `permit (
   principal == User::"alice",
@@ -9,6 +11,7 @@ const DEFAULT_POLICY = `permit (
 );`;
 
 export default function Policies() {
+  const { token } = theme.useToken();
   const [apps, setApps] = useState<Application[]>([]);
   const [error, setError] = useState<string>("");
   const [notice, setNotice] = useState<string>("");
@@ -33,23 +36,17 @@ export default function Policies() {
   const [entitiesLoading, setEntitiesLoading] = useState(false);
 
   const [selectedAppId, setSelectedAppId] = useState<number | "">("");
-  const [name, setName] = useState("allow-view");
-  const [description, setDescription] = useState("Demo allow view");
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
   const [policyText, setPolicyText] = useState(DEFAULT_POLICY);
   const [activate, setActivate] = useState(true);
-
-  const [effect, setEffect] = useState<"permit" | "forbid">("permit");
-  const [wizPrincipalType, setWizPrincipalType] = useState("User");
-  const [wizPrincipalId, setWizPrincipalId] = useState("alice");
-  const [wizActionType, setWizActionType] = useState("Action");
-  const [wizActionId, setWizActionId] = useState("view");
-  const [wizResourceType, setWizResourceType] = useState("Document");
-  const [wizResourceId, setWizResourceId] = useState("demo-doc");
 
   const [authzPrincipal, setAuthzPrincipal] = useState("User:alice");
   const [authzAction, setAuthzAction] = useState("Action:view");
   const [authzResource, setAuthzResource] = useState("Document:demo-doc");
   const [authzResult, setAuthzResult] = useState<AuthorizeResponse | null>(null);
+
+  const [activeTab, setActiveTab] = useState("view");
 
   const selectedApp = useMemo(() => apps.find((a) => a.id === selectedAppId), [apps, selectedAppId]);
 
@@ -85,9 +82,10 @@ export default function Policies() {
       setPoliciesLoading(true);
       try {
         const items = await api.listPolicies(selectedAppId);
-        setPolicies(items);
+        setPolicies(Array.isArray(items) ? items : []);
       } catch (e) {
         setError((e as Error).message);
+        setPolicies([]);
       } finally {
         setPoliciesLoading(false);
       }
@@ -104,9 +102,9 @@ export default function Policies() {
       setEntitiesLoading(true);
       try {
         const items = await api.listEntities(selectedAppId);
-        setEntities(items);
+        setEntities(Array.isArray(items) ? items : []);
       } catch (e) {
-        setError((e as Error).message);
+        setEntities([]);
       } finally {
         setEntitiesLoading(false);
       }
@@ -115,7 +113,8 @@ export default function Policies() {
 
   const entityTypes = useMemo(() => {
     const set = new Set<string>();
-    for (const e of entities) {
+    const safeEntities = Array.isArray(entities) ? entities : [];
+    for (const e of safeEntities) {
       if (e?.uid?.type) set.add(e.uid.type);
     }
     return Array.from(set).sort();
@@ -123,7 +122,8 @@ export default function Policies() {
 
   const entityIdsByType = useMemo(() => {
     const map = new Map<string, string[]>();
-    for (const e of entities) {
+    const safeEntities = Array.isArray(entities) ? entities : [];
+    for (const e of safeEntities) {
       const t = e?.uid?.type;
       const id = e?.uid?.id;
       if (!t || !id) continue;
@@ -137,25 +137,6 @@ export default function Policies() {
     return map;
   }, [entities]);
 
-  function escapeCedarString(s: string): string {
-    return s.replace(/\\/g, "\\\\").replace(/\"/g, "\\\"");
-  }
-
-  function buildPolicyText(): string {
-    const pType = wizPrincipalType.trim();
-    const pId = wizPrincipalId.trim();
-    const aType = wizActionType.trim();
-    const aId = wizActionId.trim();
-    const rType = wizResourceType.trim();
-    const rId = wizResourceId.trim();
-
-    return `${effect} (\n  principal == ${pType}::\"${escapeCedarString(pId)}\",\n  action == ${aType}::\"${escapeCedarString(aId)}\",\n  resource == ${rType}::\"${escapeCedarString(rId)}\"\n);`;
-  }
-
-  function applyWizardToTextarea() {
-    setPolicyText(buildPolicyText());
-  }
-
   async function onCreatePolicy() {
     setError("");
     setNotice("");
@@ -164,13 +145,20 @@ export default function Policies() {
       setError("Select an application first.");
       return;
     }
+    if (!name.trim()) {
+      setError("Please enter a policy name.");
+      return;
+    }
     setSavingPolicy(true);
     try {
       await api.createPolicy(selectedAppId, { name, description, policy_text: policyText, activate });
-      setNotice("Policy saved.");
-
-		const items = await api.listPolicies(selectedAppId);
-		setPolicies(items);
+      setNotice("Policy saved successfully!");
+      setName("");
+      setDescription("");
+      setPolicyText(DEFAULT_POLICY);
+      const items = await api.listPolicies(selectedAppId);
+      setPolicies(items);
+      setActiveTab("view");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -219,8 +207,7 @@ export default function Policies() {
       setNotice("Policy updated (new version created).");
       const items = await api.listPolicies(selectedAppId);
       setPolicies(items);
-      const refreshed = await api.getPolicy(selectedAppId, selectedPolicy.id);
-      setSelectedPolicy(refreshed);
+      closePolicyModal();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -257,83 +244,327 @@ export default function Policies() {
     }
   }
 
+  const tabItems = [
+    {
+      key: "view",
+      label: (
+        <span>
+          <EyeOutlined />
+          View Policies
+        </span>
+      ),
+      children: (
+        <Space direction="vertical" size={16} style={{ width: "100%" }}>
+          {policies.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 48 }}>
+              <FileTextOutlined style={{ fontSize: 48, color: token.colorTextSecondary, opacity: 0.5 }} />
+              <Typography.Paragraph type="secondary" style={{ marginTop: 16 }}>
+                No policies yet for this application.
+              </Typography.Paragraph>
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => setActiveTab("create")}>
+                Create Your First Policy
+              </Button>
+            </div>
+          ) : (
+            <Table
+              rowKey="id"
+              loading={policiesLoading}
+              pagination={false}
+              dataSource={policies}
+              onRow={(record) => ({
+                onClick: () => openPolicyModal(record.id),
+                style: { cursor: "pointer" },
+              })}
+              columns={[
+                { title: "Name", dataIndex: "name", render: (v) => <Typography.Text strong>{v}</Typography.Text> },
+                { title: "Description", dataIndex: "description", render: (v) => <Typography.Text type="secondary">{v || "—"}</Typography.Text> },
+                { 
+                  title: "Active Version", 
+                  dataIndex: "active_version", 
+                  width: 120, 
+                  render: (v) => v ? <Tag color="green">v{v}</Tag> : <Tag>—</Tag>
+                },
+                { 
+                  title: "Latest Version", 
+                  dataIndex: "latest_version", 
+                  width: 120, 
+                  render: (v) => v ? <Tag>v{v}</Tag> : "—"
+                },
+              ]}
+            />
+          )}
+        </Space>
+      ),
+    },
+    {
+      key: "create",
+      label: (
+        <span>
+          <PlusOutlined />
+          Create Policy
+        </span>
+      ),
+      children: (
+        <Row gutter={[24, 24]}>
+          <Col xs={24} lg={14}>
+            <Space direction="vertical" size={24} style={{ width: "100%" }}>
+              {/* Visual Policy Builder */}
+              <PolicyDragDropBuilder
+                onPolicyGenerated={(generatedPolicy) => setPolicyText(generatedPolicy)}
+                entityTypes={entityTypes}
+                entityIdsByType={entityIdsByType}
+              />
+            </Space>
+          </Col>
+          
+          <Col xs={24} lg={10}>
+            <Card title="Save Policy" style={{ position: "sticky", top: 24 }}>
+              <Space direction="vertical" size={16} style={{ width: "100%" }}>
+                <div>
+                  <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>
+                    Policy Name <span style={{ color: token.colorError }}>*</span>
+                  </Typography.Text>
+                  <Input 
+                    value={name} 
+                    onChange={(e) => setName(e.target.value)} 
+                    placeholder="e.g., allow-users-view-documents"
+                  />
+                </div>
+                
+                <div>
+                  <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>
+                    Description
+                  </Typography.Text>
+                  <Input 
+                    value={description} 
+                    onChange={(e) => setDescription(e.target.value)} 
+                    placeholder="Optional description"
+                  />
+                </div>
+                
+                <div>
+                  <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>
+                    Policy Text (Cedar)
+                  </Typography.Text>
+                  <Input.TextArea 
+                    value={policyText} 
+                    onChange={(e) => setPolicyText(e.target.value)} 
+                    rows={8}
+                    style={{ fontFamily: "'Fira Code', 'Monaco', monospace", fontSize: 12 }}
+                  />
+                </div>
+
+                <Checkbox checked={activate} onChange={(e) => setActivate(e.target.checked)}>
+                  Activate this policy immediately
+                </Checkbox>
+
+                <Button 
+                  type="primary" 
+                  onClick={onCreatePolicy} 
+                  loading={savingPolicy} 
+                  disabled={selectedAppId === "" || !name.trim() || !policyText.trim()}
+                  block
+                  size="large"
+                >
+                  Save Policy
+                </Button>
+              </Space>
+            </Card>
+          </Col>
+        </Row>
+      ),
+    },
+    {
+      key: "test",
+      label: (
+        <span>
+          <ThunderboltOutlined />
+          Test Authorization
+        </span>
+      ),
+      children: (
+        <Row gutter={[24, 24]}>
+          <Col xs={24} lg={12}>
+            <Card title="Authorization Request">
+              <Space direction="vertical" size={16} style={{ width: "100%" }}>
+                <Alert
+                  type="info"
+                  showIcon
+                  message="Test your policies"
+                  description="Enter a principal, action, and resource to check if the request would be allowed or denied."
+                />
+
+                <div>
+                  <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>
+                    Principal (Who is making the request?)
+                  </Typography.Text>
+                  <Input 
+                    value={authzPrincipal} 
+                    onChange={(e) => setAuthzPrincipal(e.target.value)} 
+                    placeholder="Type:id (e.g., User:alice)"
+                  />
+                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                    Format: Type:id (e.g., User:alice, Group:admins)
+                  </Typography.Text>
+                </div>
+                
+                <div>
+                  <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>
+                    Action (What do they want to do?)
+                  </Typography.Text>
+                  <Input 
+                    value={authzAction} 
+                    onChange={(e) => setAuthzAction(e.target.value)}
+                    placeholder="Action:view"
+                  />
+                </div>
+                
+                <div>
+                  <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>
+                    Resource (On what?)
+                  </Typography.Text>
+                  <Input 
+                    value={authzResource} 
+                    onChange={(e) => setAuthzResource(e.target.value)}
+                    placeholder="Document:doc-123"
+                  />
+                </div>
+                
+                <Button 
+                  type="primary" 
+                  onClick={onAuthorize} 
+                  loading={authorizing} 
+                  disabled={selectedAppId === ""}
+                  icon={<ThunderboltOutlined />}
+                  block
+                  size="large"
+                >
+                  Check Authorization
+                </Button>
+              </Space>
+            </Card>
+          </Col>
+          
+          <Col xs={24} lg={12}>
+            <Card title="Result" style={{ height: "100%" }}>
+              {!authzResult ? (
+                <div style={{ textAlign: "center", padding: 48, color: token.colorTextSecondary }}>
+                  <ThunderboltOutlined style={{ fontSize: 48, opacity: 0.3 }} />
+                  <Typography.Paragraph type="secondary" style={{ marginTop: 16 }}>
+                    Run an authorization check to see the result here
+                  </Typography.Paragraph>
+                </div>
+              ) : (
+                <div style={{ textAlign: "center" }}>
+                  <div
+                    style={{
+                      padding: 32,
+                      background: authzResult.decision === "allow" ? "#f6ffed" : "#fff2f0",
+                      borderRadius: 8,
+                      border: `2px solid ${authzResult.decision === "allow" ? "#52c41a" : "#ff4d4f"}`,
+                      marginBottom: 16,
+                    }}
+                  >
+                    <Typography.Title 
+                      level={2} 
+                      style={{ margin: 0, color: authzResult.decision === "allow" ? "#52c41a" : "#ff4d4f" }}
+                    >
+                      {authzResult.decision === "allow" ? "✓ ALLOWED" : "✗ DENIED"}
+                    </Typography.Title>
+                  </div>
+                  
+                  {authzResult.reasons && authzResult.reasons.length > 0 && (
+                    <div style={{ textAlign: "left" }}>
+                      <Typography.Text strong>Reasons:</Typography.Text>
+                      <ul style={{ margin: "8px 0 0", paddingLeft: 20 }}>
+                        {authzResult.reasons.map((r, i) => (
+                          <li key={i}><Typography.Text code>{r}</Typography.Text></li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </Card>
+          </Col>
+        </Row>
+      ),
+    },
+  ];
+
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+    <Space direction="vertical" size={24} style={{ width: "100%" }}>
+      {/* Header */}
       <div>
         <Typography.Title level={2} style={{ margin: 0 }}>
           Policies
         </Typography.Title>
         <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
-          Create policy versions and (optionally) activate them for an application.
+          Create and manage Cedar authorization policies for your applications.
         </Typography.Paragraph>
-        <Typography.Text type="secondary">
-          API: <Typography.Text code>{API_BASE_URL}</Typography.Text>
-        </Typography.Text>
       </div>
 
-      {error ? <Alert type="error" showIcon message={error} /> : null}
-      {notice ? <Alert type="success" showIcon message={notice} /> : null}
+      {/* Alerts */}
+      {error && <Alert type="error" showIcon message={error} closable onClose={() => setError("")} />}
+      {notice && <Alert type="success" showIcon message={notice} closable onClose={() => setNotice("")} />}
 
-      <Card title="Application" loading={loading}>
-        <Space direction="vertical" size={8} style={{ width: "100%" }}>
-          <div>
-            <Typography.Text>Selected application</Typography.Text>
+      {/* Application Selector */}
+      <Card size="small">
+        <Space style={{ width: "100%", justifyContent: "space-between", flexWrap: "wrap" }}>
+          <Space>
+            <Typography.Text strong>Application:</Typography.Text>
             <Select
               value={selectedAppId === "" ? undefined : selectedAppId}
               onChange={(v) => setSelectedAppId(v)}
-              placeholder="Select…"
-              style={{ width: "100%" }}
+              placeholder="Select an application..."
+              style={{ minWidth: 250 }}
+              loading={loading}
               showSearch
               optionFilterProp="label"
-              options={apps.map((a) => ({ value: a.id, label: `${a.name} (id=${a.id})` }))}
+              options={apps.map((a) => ({ 
+                value: a.id, 
+                label: `${a.name} (${a.namespace_name})` 
+              }))}
             />
-          </div>
-          {selectedApp ? (
-            <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
-              Selected: {selectedApp.name}
-            </Typography.Paragraph>
-          ) : null}
+          </Space>
+          {selectedApp && (
+            <Tag color="blue">{policies.length} {policies.length === 1 ? 'policy' : 'policies'}</Tag>
+          )}
         </Space>
       </Card>
 
-      <Card title="Existing policies" loading={loading}>
-        {selectedAppId === "" ? (
-          <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
-            Select an application to view its policies.
-          </Typography.Paragraph>
-        ) : (
-          <Table
-            rowKey="id"
-            loading={policiesLoading}
-            pagination={false}
-            dataSource={policies}
-            onRow={(record) => ({
-              onClick: () => openPolicyModal(record.id),
-              style: { cursor: "pointer" },
-            })}
-            columns={[
-              { title: "Name", dataIndex: "name" },
-              { title: "Description", dataIndex: "description", render: (v) => <Typography.Text type="secondary">{v}</Typography.Text> },
-              { title: "Active", dataIndex: "active_version", width: 120, render: (v) => v || "—" },
-              { title: "Latest", dataIndex: "latest_version", width: 120, render: (v) => v || "—" },
-            ]}
-            locale={{ emptyText: "No policies yet for this application." }}
-          />
-        )}
-      </Card>
+      {/* Main Content Tabs */}
+      {selectedAppId !== "" ? (
+        <Tabs 
+          activeKey={activeTab} 
+          onChange={setActiveTab} 
+          items={tabItems}
+          type="card"
+        />
+      ) : (
+        <Card>
+          <div style={{ textAlign: "center", padding: 48 }}>
+            <Typography.Paragraph type="secondary">
+              Select an application above to manage its policies.
+            </Typography.Paragraph>
+          </div>
+        </Card>
+      )}
 
+      {/* Policy Edit Modal */}
       <Modal
         open={policyModalOpen}
-        title={selectedPolicy ? `Policy: ${selectedPolicy.name}` : "Policy"}
+        title={selectedPolicy ? `Edit Policy: ${selectedPolicy.name}` : "Policy"}
         onCancel={closePolicyModal}
+        width={700}
         footer={
           <Space>
-            <Button onClick={closePolicyModal}>Close</Button>
+            <Button onClick={closePolicyModal}>Cancel</Button>
             <Button
               onClick={() => setEditPolicyText(selectedPolicy?.active_policy_text || "")}
               disabled={!selectedPolicy?.active_policy_text}
             >
-              Load active text
+              Load Active Version
             </Button>
             <Button
               type="primary"
@@ -341,7 +572,7 @@ export default function Policies() {
               loading={savingExisting}
               disabled={!selectedPolicy || !editPolicyText.trim()}
             >
-              Save new version
+              Save New Version
             </Button>
           </Space>
         }
@@ -353,189 +584,35 @@ export default function Policies() {
             No policy selected.
           </Typography.Paragraph>
         ) : (
-          <Space direction="vertical" size={12} style={{ width: "100%" }}>
-            <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
-              Active v{selectedPolicy.active_version || "—"} · Latest v{selectedPolicy.latest_version || "—"}
-            </Typography.Paragraph>
+          <Space direction="vertical" size={16} style={{ width: "100%" }}>
+            <Space>
+              <Tag color="green">Active: v{selectedPolicy.active_version || "—"}</Tag>
+              <Tag>Latest: v{selectedPolicy.latest_version || "—"}</Tag>
+            </Space>
 
             <div>
-              <Typography.Text>Name</Typography.Text>
-              <Input value={selectedPolicy.name} readOnly />
+              <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>Name</Typography.Text>
+              <Input value={selectedPolicy.name} readOnly disabled />
             </div>
             <div>
-              <Typography.Text>Description</Typography.Text>
+              <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>Description</Typography.Text>
               <Input value={editDescription} onChange={(e) => setEditDescription(e.target.value)} />
             </div>
             <div>
-              <Typography.Text>Latest policy text (editable)</Typography.Text>
-              <Input.TextArea value={editPolicyText} onChange={(e) => setEditPolicyText(e.target.value)} rows={12} />
+              <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>Policy Text</Typography.Text>
+              <Input.TextArea 
+                value={editPolicyText} 
+                onChange={(e) => setEditPolicyText(e.target.value)} 
+                rows={12}
+                style={{ fontFamily: "'Fira Code', 'Monaco', monospace", fontSize: 12 }}
+              />
             </div>
             <Checkbox checked={editActivate} onChange={(e) => setEditActivate(e.target.checked)}>
-              Activate new version
+              Activate this version immediately
             </Checkbox>
           </Space>
         )}
       </Modal>
-
-      <Card title="Create policy" loading={loading}>
-        <Space direction="vertical" size={12} style={{ width: "100%" }}>
-          <Card type="inner" title="Policy builder">
-            <Space direction="vertical" size={12} style={{ width: "100%" }}>
-              <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
-                Select principal/action/resource and generate a Cedar policy. You can still edit the text below.
-              </Typography.Paragraph>
-
-              {selectedAppId !== "" && entitiesLoading ? (
-                <Typography.Paragraph style={{ margin: 0 }}>Loading entities…</Typography.Paragraph>
-              ) : null}
-
-              <div>
-                <Typography.Text>Effect</Typography.Text>
-                <Select
-                  value={effect}
-                  onChange={(v) => setEffect(v === "forbid" ? "forbid" : "permit")}
-                  style={{ width: "100%" }}
-                  options={[
-                    { value: "permit", label: "permit" },
-                    { value: "forbid", label: "forbid" },
-                  ]}
-                />
-              </div>
-
-              <Space direction="vertical" size={8} style={{ width: "100%" }}>
-                <Typography.Text strong>Principal</Typography.Text>
-                <Select
-                  value={wizPrincipalType}
-                  onChange={(t) => {
-                    setWizPrincipalType(t);
-                    const ids = entityIdsByType.get(t);
-                    if (ids && ids.length > 0) setWizPrincipalId(ids[0]);
-                  }}
-                  style={{ width: "100%" }}
-                  options={(entityTypes.length ? entityTypes : ["User"]).map((t) => ({ value: t, label: t }))}
-                />
-                <Select
-                  value={wizPrincipalId}
-                  onChange={(v) => setWizPrincipalId(v)}
-                  style={{ width: "100%" }}
-                  placeholder="Select id"
-                  options={(entityIdsByType.get(wizPrincipalType) ?? []).map((id) => ({ value: id, label: id }))}
-                />
-                <Input value={wizPrincipalId} onChange={(e) => setWizPrincipalId(e.target.value)} placeholder="alice" />
-              </Space>
-
-              <Space direction="vertical" size={8} style={{ width: "100%" }}>
-                <Typography.Text strong>Action</Typography.Text>
-                <Select
-                  value={wizActionType}
-                  onChange={(t) => {
-                    setWizActionType(t);
-                    const ids = entityIdsByType.get(t);
-                    if (ids && ids.length > 0) setWizActionId(ids[0]);
-                  }}
-                  style={{ width: "100%" }}
-                  options={(entityTypes.length ? entityTypes : ["Action"]).map((t) => ({ value: t, label: t }))}
-                />
-                <Select
-                  value={wizActionId}
-                  onChange={(v) => setWizActionId(v)}
-                  style={{ width: "100%" }}
-                  placeholder="Select id"
-                  options={(entityIdsByType.get(wizActionType) ?? []).map((id) => ({ value: id, label: id }))}
-                />
-                <Input value={wizActionId} onChange={(e) => setWizActionId(e.target.value)} placeholder="view" />
-              </Space>
-
-              <Space direction="vertical" size={8} style={{ width: "100%" }}>
-                <Typography.Text strong>Resource</Typography.Text>
-                <Select
-                  value={wizResourceType}
-                  onChange={(t) => {
-                    setWizResourceType(t);
-                    const ids = entityIdsByType.get(t);
-                    if (ids && ids.length > 0) setWizResourceId(ids[0]);
-                  }}
-                  style={{ width: "100%" }}
-                  options={(entityTypes.length ? entityTypes : ["Document"]).map((t) => ({ value: t, label: t }))}
-                />
-                <Select
-                  value={wizResourceId}
-                  onChange={(v) => setWizResourceId(v)}
-                  style={{ width: "100%" }}
-                  placeholder="Select id"
-                  options={(entityIdsByType.get(wizResourceType) ?? []).map((id) => ({ value: id, label: id }))}
-                />
-                <Input value={wizResourceId} onChange={(e) => setWizResourceId(e.target.value)} placeholder="demo-doc" />
-              </Space>
-
-              <div>
-                <Typography.Text>Preview</Typography.Text>
-                <pre>{buildPolicyText()}</pre>
-              </div>
-
-              <Button
-                onClick={applyWizardToTextarea}
-                disabled={!wizPrincipalType || !wizPrincipalId || !wizActionType || !wizActionId || !wizResourceType || !wizResourceId}
-              >
-                Use this in policy text
-              </Button>
-            </Space>
-          </Card>
-
-          <div>
-            <Typography.Text>Name</Typography.Text>
-            <Input value={name} onChange={(e) => setName(e.target.value)} />
-          </div>
-          <div>
-            <Typography.Text>Description</Typography.Text>
-            <Input value={description} onChange={(e) => setDescription(e.target.value)} />
-          </div>
-          <div>
-            <Typography.Text>Policy text</Typography.Text>
-            <Input.TextArea value={policyText} onChange={(e) => setPolicyText(e.target.value)} rows={9} />
-          </div>
-
-          <Checkbox checked={activate} onChange={(e) => setActivate(e.target.checked)}>
-            Activate this version
-          </Checkbox>
-
-          <Button type="primary" onClick={onCreatePolicy} loading={savingPolicy} disabled={selectedAppId === "" || !name || !policyText}>
-            Save
-          </Button>
-
-          {selectedApp ? (
-            <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
-              Selected: {selectedApp.name}
-            </Typography.Paragraph>
-          ) : null}
-        </Space>
-      </Card>
-
-      <Card title="Authorize sandbox" loading={loading}>
-        <Space direction="vertical" size={12} style={{ width: "100%" }}>
-          <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
-            Format: <Typography.Text code>Type:id</Typography.Text> (e.g. <Typography.Text code>User:alice</Typography.Text>)
-          </Typography.Paragraph>
-
-          <div>
-            <Typography.Text>Principal</Typography.Text>
-            <Input value={authzPrincipal} onChange={(e) => setAuthzPrincipal(e.target.value)} />
-          </div>
-          <div>
-            <Typography.Text>Action</Typography.Text>
-            <Input value={authzAction} onChange={(e) => setAuthzAction(e.target.value)} />
-          </div>
-          <div>
-            <Typography.Text>Resource</Typography.Text>
-            <Input value={authzResource} onChange={(e) => setAuthzResource(e.target.value)} />
-          </div>
-          <Button type="primary" onClick={onAuthorize} loading={authorizing} disabled={selectedAppId === ""}>
-            Authorize
-          </Button>
-
-          {authzResult ? <pre>{JSON.stringify(authzResult, null, 2)}</pre> : <Typography.Text type="secondary">No result yet.</Typography.Text>}
-        </Space>
-      </Card>
     </Space>
   );
 }
