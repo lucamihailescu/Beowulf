@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: backend-run backend-lint backend-migrate backend-seed backend-docs web-install web-dev web-build compose-up compose-down e2e-demo
+.PHONY: backend-run backend-lint backend-migrate backend-seed backend-docs web-install web-dev web-build compose-up compose-down e2e-demo clients-grpc clients-rest clients-all clients-python clients-javascript clients-csharp
 
 backend-run:
 	cd backend && go run ./cmd/server
@@ -37,3 +37,31 @@ compose-down:
 
 e2e-demo:
 	sh ./scripts/e2e_demo.sh
+
+# =============================================================================
+# Client SDK Generation
+# =============================================================================
+
+clients-grpc:
+	chmod +x clients/generate.sh
+	./clients/generate.sh --grpc --all-languages
+
+clients-rest:
+	chmod +x clients/generate.sh
+	./clients/generate.sh --rest --all-languages
+
+clients-all:
+	chmod +x clients/generate.sh
+	./clients/generate.sh --all --all-languages
+
+clients-python:
+	chmod +x clients/generate.sh
+	./clients/generate.sh --all --python
+
+clients-javascript:
+	chmod +x clients/generate.sh
+	./clients/generate.sh --all --javascript
+
+clients-csharp:
+	chmod +x clients/generate.sh
+	./clients/generate.sh --all --csharp

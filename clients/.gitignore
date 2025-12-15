@@ -1,0 +1,24 @@
+# Generated files
+python/grpc/authz_pb2*.py
+python/grpc/__pycache__/
+python/rest/
+
+javascript/grpc/node_modules/
+javascript/grpc/*.js
+javascript/grpc/*.d.ts
+javascript/grpc/package-lock.json
+javascript/rest/
+
+csharp/grpc/bin/
+csharp/grpc/obj/
+csharp/rest/
+
+# Keep client wrappers and package configs
+!python/grpc/client.py
+!python/grpc/__init__.py
+!javascript/grpc/package.json
+!javascript/grpc/index.js
+!javascript/grpc/index.d.ts
+!csharp/grpc/EPM.Grpc.Client.csproj
+!csharp/grpc/EPMClient.cs
+
