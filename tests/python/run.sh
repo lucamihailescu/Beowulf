@@ -22,3 +22,6 @@ python test_entitlements.py
 echo "Running REST tests..."
 python test_rest_entitlements.py
 
+echo "Running Cache Validation tests..."
+python test_authorize_cache.py
+

@@ -21,6 +21,7 @@ type Config struct {
 
 	// Authentication configuration
 	AuthMode        string // "jwt", "kerberos", or "none"
+	APIKey          string // Optional API Key for external read-only access
 	AzureTenantID   string // Entra ID tenant ID
 	AzureClientID   string // App registration client ID
 	AzureAudience   string // Expected token audience
@@ -44,6 +45,7 @@ func Load() Config {
 
 		// Authentication
 		AuthMode:        getenv("AUTH_MODE", "none"),
+		APIKey:          getenv("API_KEY", ""),
 		AzureTenantID:   getenv("AZURE_TENANT_ID", ""),
 		AzureClientID:   getenv("AZURE_CLIENT_ID", ""),
 		AzureAudience:   getenv("AZURE_AUDIENCE", ""),

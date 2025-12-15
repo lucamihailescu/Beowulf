@@ -38,6 +38,7 @@ func GetUserFromContext(ctx context.Context) *UserContext {
 // AuthMiddleware provides authentication middleware based on configuration.
 type AuthMiddleware struct {
 	mode           string
+	apiKey         string
 	jwtValidator   *JWTValidator
 	kerbValidator  *KerberosValidator
 }
@@ -45,7 +46,8 @@ type AuthMiddleware struct {
 // NewAuthMiddleware creates a new authentication middleware.
 func NewAuthMiddleware(cfg config.Config) (*AuthMiddleware, error) {
 	am := &AuthMiddleware{
-		mode: strings.ToLower(cfg.AuthMode),
+		mode:   strings.ToLower(cfg.AuthMode),
+		apiKey: cfg.APIKey,
 	}
 
 	switch am.mode {
@@ -85,6 +87,40 @@ func (am *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 		if r.URL.Path == "/health" || r.URL.Path == "/healthz" {
 			next.ServeHTTP(w, r)
 			return
+		}
+
+		// Check for API Key Authentication
+		if am.apiKey != "" {
+			if key := r.Header.Get("X-API-Key"); key != "" {
+				if key == am.apiKey {
+					// Enforce Read-Only for API Key
+					if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(http.StatusForbidden)
+						_ = json.NewEncoder(w).Encode(map[string]string{
+							"error": "API Key allows read-only access only",
+						})
+						return
+					}
+
+					// Authenticated via API Key
+					ctx := context.WithValue(r.Context(), UserContextKey, &UserContext{
+						ID:     "api-key",
+						Name:   "External System",
+						Groups: []string{"ReadOnly"},
+					})
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+
+				// Invalid key provided - reject immediately
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				_ = json.NewEncoder(w).Encode(map[string]string{
+					"error": "Invalid API Key",
+				})
+				return
+			}
 		}
 
 		// If auth is disabled, create anonymous user and continue

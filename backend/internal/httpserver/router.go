@@ -142,7 +142,11 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 			return
 		}
 
-		result, err := authzSvc.Evaluate(r.Context(), authz.EvaluateInput{
+		// Prepare context with cache source tracker
+		var cacheSource string = "DB" // Default if not updated
+		ctx := context.WithValue(r.Context(), storage.CtxKeyCacheSource, &cacheSource)
+
+		result, err := authzSvc.Evaluate(ctx, authz.EvaluateInput{
 			ApplicationID: req.ApplicationID,
 			Principal:     authz.Reference{Type: req.Principal.Type, ID: req.Principal.ID},
 			Action:        authz.Reference{Type: req.Action.Type, ID: req.Action.ID},
@@ -154,6 +158,9 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
+
+		// Set response header to indicate cache source (L1, L2, or DB)
+		w.Header().Set("X-Cedar-Cache", cacheSource)
 
 		// Log authorization decision to audit trail
 		if audits != nil {
