@@ -35,6 +35,9 @@ services:
       # Authentication settings
       AUTH_MODE: ${AUTH_MODE:-none}
       API_KEY: ${API_KEY:-dev-secret-key}
+      # Rate Limiting
+      RATE_LIMIT_REQUESTS: ${RATE_LIMIT_REQUESTS:-100}
+      RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-1m}
       AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
       AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
       AZURE_AUDIENCE: ${AZURE_AUDIENCE:-}

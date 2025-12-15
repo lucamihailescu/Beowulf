@@ -6,6 +6,9 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
+
+	"github.com/go-chi/httprate"
 
 	"cedar/internal/config"
 )
@@ -230,3 +233,40 @@ func RequireAuth(next http.Handler) http.Handler {
 	})
 }
 
+// NewRateLimiter creates a rate limiting middleware based on configuration.
+// Rate limiting is per authenticated caller (user ID).
+// Returns nil if rate limiting is disabled (RateLimitRequests == 0).
+func NewRateLimiter(cfg config.Config) func(http.Handler) http.Handler {
+	if cfg.RateLimitRequests <= 0 {
+		log.Println("Rate limiting disabled (RATE_LIMIT_REQUESTS=0)")
+		return nil
+	}
+
+	log.Printf("Rate limiting enabled: %d requests per %v per caller", cfg.RateLimitRequests, cfg.RateLimitWindow)
+
+	return httprate.Limit(
+		cfg.RateLimitRequests,
+		cfg.RateLimitWindow,
+		httprate.WithKeyFuncs(func(r *http.Request) (string, error) {
+			// Rate limit by authenticated user ID
+			user := GetUserFromContext(r.Context())
+			if user != nil && user.ID != "" {
+				return user.ID, nil
+			}
+			// Fall back to IP for unauthenticated requests
+			return httprate.KeyByIP(r)
+		}),
+		httprate.WithLimitHandler(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": "Rate limit exceeded. Please slow down.",
+			})
+		}),
+	)
+}
+
+// RateLimitWindow returns the window duration for rate limiting headers.
+func RateLimitWindow(cfg config.Config) time.Duration {
+	return cfg.RateLimitWindow
+}

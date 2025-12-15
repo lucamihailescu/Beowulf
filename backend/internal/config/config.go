@@ -27,6 +27,10 @@ type Config struct {
 	AzureAudience   string // Expected token audience
 	KerberosKeytab  string // Path to keytab file
 	KerberosService string // Service principal (e.g., HTTP/cedar.example.com)
+
+	// Rate Limiting
+	RateLimitRequests int           // Max requests per window per caller (0 = disabled)
+	RateLimitWindow   time.Duration // Time window for rate limiting
 }
 
 // Load reads configuration from environment with sensible defaults.
@@ -51,6 +55,10 @@ func Load() Config {
 		AzureAudience:   getenv("AZURE_AUDIENCE", ""),
 		KerberosKeytab:  getenv("KERBEROS_KEYTAB", ""),
 		KerberosService: getenv("KERBEROS_SERVICE", ""),
+
+		// Rate Limiting
+		RateLimitRequests: int(getint("RATE_LIMIT_REQUESTS", 100)),       // Default: 100 requests
+		RateLimitWindow:   getduration("RATE_LIMIT_WINDOW", time.Minute), // Default: per minute
 	}
 	return cfg
 }

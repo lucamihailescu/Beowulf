@@ -30,9 +30,17 @@ A full-stack implementation for managing [Cedar](https://github.com/cedar-policy
 
 ### Performance & Scalability
 - **Redis Caching** — Cache policies and entities for fast authorization decisions
-- **Cache Invalidation** — Automatic invalidation when policies or entities change
+- **L1/L2 Cache** — In-memory L1 cache with Redis L2 for sub-millisecond authorization
+- **Cache Invalidation** — Automatic invalidation via Redis Pub/Sub when policies or entities change
 - **Connection Pooling** — Optimized PostgreSQL connection pooling with support for **Read Replicas**
 - **gRPC API** — High-performance Protobuf API for internal service-to-service communication
+- **Rate Limiting** — Per-caller rate limiting to prevent abuse and ensure fair usage
+
+### Security
+- **JWT Authentication** — Azure Entra ID (Azure AD) JWT token validation
+- **Kerberos Authentication** — SPNEGO/Negotiate authentication for enterprise environments
+- **API Key Access** — Read-only API key for exception-based external access
+- **Audit Trail** — Tracks both the authenticated caller and the subject of authorization checks
 
 ## Architecture
 
@@ -105,6 +113,15 @@ A full-stack implementation for managing [Cedar](https://github.com/cedar-policy
 | `REDIS_PASSWORD` | `` | Redis password (optional) |
 | `AUTHZ_CACHE_TTL` | `5s` | Cache TTL for policies/entities |
 | `CORS_ALLOW_ORIGINS` | `*` | Allowed CORS origins |
+| `AUTH_MODE` | `none` | Authentication mode: `jwt`, `kerberos`, or `none` |
+| `API_KEY` | `` | Optional API key for read-only external access |
+| `AZURE_TENANT_ID` | `` | Azure Entra ID tenant ID (for JWT auth) |
+| `AZURE_CLIENT_ID` | `` | Azure app registration client ID (for JWT auth) |
+| `AZURE_AUDIENCE` | `` | Expected JWT token audience |
+| `KERBEROS_KEYTAB` | `` | Path to Kerberos keytab file |
+| `KERBEROS_SERVICE` | `` | Kerberos service principal (e.g., `HTTP/cedar.example.com`) |
+| `RATE_LIMIT_REQUESTS` | `100` | Max requests per window per caller (0 = disabled) |
+| `RATE_LIMIT_WINDOW` | `1m` | Time window for rate limiting (e.g., `1m`, `30s`) |
 | `VITE_API_BASE_URL` | `http://localhost:8080` | Backend API URL for frontend |
 
 ## API Reference
@@ -415,7 +432,7 @@ forbid (
 
 ## Production Considerations
 
-1. **Authentication** — The current implementation does not include authentication. Consider adding JWT or session-based auth for production.
+1. **Authentication** — Configure `AUTH_MODE=jwt` or `AUTH_MODE=kerberos` for production. API Keys should only be used for exception-based read-only access.
 
 2. **HTTPS** — Use a reverse proxy (nginx, Caddy) or load balancer for TLS termination.
 
@@ -423,9 +440,52 @@ forbid (
 
 4. **Caching** — Use managed Redis (ElastiCache, Memorystore) for high availability.
 
-5. **Monitoring** — Add OpenTelemetry instrumentation for tracing and metrics.
+5. **Rate Limiting** — Configure `RATE_LIMIT_REQUESTS` and `RATE_LIMIT_WINDOW` to protect against abuse.
 
-6. **Backups** — Configure automated database backups and audit log retention.
+6. **Monitoring** — Add OpenTelemetry instrumentation for tracing and metrics.
+
+7. **Backups** — Configure automated database backups and audit log retention.
+
+## MCP Server Integration
+
+This solution can be used as an authorization backend for **Model Context Protocol (MCP)** servers. MCP servers should authenticate using JWT or Kerberos (not API Keys).
+
+### Architecture
+
+```
+┌──────────────┐                      ┌─────────────────┐
+│   End User   │──(User Token)───────▶│   MCP Server    │
+└──────────────┘                      │  (Service Acct) │
+                                      │                 │
+                                      │  Authenticates  │
+                                      │  to Cedar with  │
+                                      │  SERVICE JWT    │
+                                      └────────┬────────┘
+                                               │
+                              POST /v1/authorize
+                              Authorization: Bearer <SERVICE_JWT>
+                              {
+                                "principal": {"type": "User", "id": "alice"},
+                                ...
+                              }
+                                               │
+                                               ▼
+                                      ┌─────────────────┐
+                                      │   Cedar API     │
+                                      └─────────────────┘
+```
+
+### Audit Trail
+
+Authorization requests are logged with both:
+- **Caller**: The authenticated service making the request (e.g., `mcp-service@example.com`)
+- **Principal**: The subject of the authorization check (e.g., `User::alice`)
+
+This allows you to track which services are checking permissions for which users.
+
+### Rate Limiting
+
+Rate limiting is applied per authenticated caller to prevent runaway services from overloading Cedar. Configure limits using `RATE_LIMIT_REQUESTS` and `RATE_LIMIT_WINDOW`.
 
 ## License
 

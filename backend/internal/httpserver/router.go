@@ -109,6 +109,11 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 	}
 	r.Use(authMiddleware.Middleware)
 
+	// Initialize rate limiter (must be after auth middleware to access user context)
+	if rateLimiter := NewRateLimiter(cfg); rateLimiter != nil {
+		r.Use(rateLimiter)
+	}
+
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(healthResponse{Status: "ok"})
@@ -168,8 +173,16 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 			principal := req.Principal.Type + "::" + req.Principal.ID
 			action := req.Action.Type + "::" + req.Action.ID
 			resource := req.Resource.Type + "::" + req.Resource.ID
+
+			// Get the authenticated caller (service/user making the request)
+			caller := "unknown"
+			if user := GetUserFromContext(r.Context()); user != nil {
+				caller = user.ID
+			}
+
 			auditCtx := map[string]any{
-				"principal": principal,
+				"caller":    caller,    // Authenticated service/user making the request
+				"principal": principal, // Subject of the authorization check
 				"action":    action,
 				"resource":  resource,
 				"reasons":   result.Reasons,
@@ -178,7 +191,8 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 			if req.Context != nil {
 				auditCtx["request_context"] = req.Context
 			}
-			_ = audits.Log(r.Context(), &appID, principal, "authorize", resource, result.Decision, auditCtx)
+			// Actor is the authenticated caller, not the principal being checked
+			_ = audits.Log(r.Context(), &appID, caller, "authorize", resource, result.Decision, auditCtx)
 		}
 
 		w.WriteHeader(http.StatusOK)
