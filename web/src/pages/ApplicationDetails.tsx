@@ -123,12 +123,36 @@ export default function ApplicationDetails() {
     setSavingExisting(false);
   }
 
+  async function onApprovePolicy(policy: PolicySummary) {
+    setError("");
+    setNotice("");
+    try {
+      await api.approvePolicy(appId, policy.id, policy.latest_version);
+      setNotice(`Policy "${policy.name}" v${policy.latest_version} approved.`);
+      setPolicies(await api.listPolicies(appId));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function onActivatePolicy(policy: PolicySummary) {
+    setError("");
+    setNotice("");
+    try {
+      await api.activatePolicy(appId, policy.id, policy.latest_version);
+      setNotice(`Policy "${policy.name}" v${policy.latest_version} activated.`);
+      setPolicies(await api.listPolicies(appId));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   async function onSaveExistingPolicy() {
     if (!selectedPolicy) return;
     setError("");
     setSavingExisting(true);
     try {
-      await api.createPolicy(appId, {
+      const res = await api.createPolicy(appId, {
         name: selectedPolicy.name,
         description: editDescription,
         policy_text: editPolicyText,
@@ -138,6 +162,11 @@ export default function ApplicationDetails() {
       setPolicyModalOpen(false);
       // Refresh policies list
       setPolicies(await api.listPolicies(appId));
+      if (res.status === "pending_approval") {
+        setNotice("Policy saved successfully but requires approval before it becomes active.");
+      } else {
+        setNotice("Policy saved successfully.");
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -205,13 +234,17 @@ export default function ApplicationDetails() {
     setNotice("");
     setSavingPolicy(true);
     try {
-      await api.createPolicy(appId, {
+      const res = await api.createPolicy(appId, {
         name,
         description,
         policy_text: policyText,
         activate,
       });
-      setNotice(`Policy "${name}" created successfully.`);
+      if (res.status === "pending_approval") {
+        setNotice(`Policy "${name}" created but requires approval.`);
+      } else {
+        setNotice(`Policy "${name}" created successfully.`);
+      }
       setPolicyWizardOpen(false);
       setPolicies(await api.listPolicies(appId));
     } catch (e) {
@@ -236,6 +269,9 @@ export default function ApplicationDetails() {
             <Descriptions.Item label="ID">{app.id}</Descriptions.Item>
             <Descriptions.Item label="Namespace"><Tag color="blue">{app.namespace_name}</Tag></Descriptions.Item>
             <Descriptions.Item label="Description">{app.description || <Tag color="default">None</Tag>}</Descriptions.Item>
+            <Descriptions.Item label="Approval">
+              {app.approval_required ? <Tag color="orange">Required</Tag> : <Tag color="green">Not Required</Tag>}
+            </Descriptions.Item>
             <Descriptions.Item label="Created At">{app.created_at ? new Date(app.created_at).toLocaleString() : <Tag>Unknown</Tag>}</Descriptions.Item>
           </Descriptions>
         ) : (
@@ -260,7 +296,7 @@ export default function ApplicationDetails() {
                   icon: <FileTextOutlined />,
                   label: "Write Cedar Policy Manually",
                   onClick: () => {
-                    setSelectedPolicy({ id: 0, name: "", description: "", active_version: 0, latest_version: 0, active_policy_text: "", latest_policy_text: "", created_at: "", updated_at: "" });
+                    setSelectedPolicy({ id: 0, name: "", description: "", active_version: 0, latest_version: 0, active_policy_text: "", latest_policy_text: "", active_status: "", latest_status: "", created_at: "", updated_at: "" });
                     setEditDescription("");
                     setEditPolicyText("");
                     setPolicyModalOpen(true);
@@ -284,8 +320,36 @@ export default function ApplicationDetails() {
           columns={[
             { title: "Name", dataIndex: "name" },
             { title: "Description", dataIndex: "description" },
-            { title: "Active", dataIndex: "active_version", width: 120, render: (v) => v || "—" },
-            { title: "Latest", dataIndex: "latest_version", width: 120, render: (v) => v || "—" },
+            { title: "Active", dataIndex: "active_version", width: 80, render: (v) => v || "—" },
+            { title: "Latest", dataIndex: "latest_version", width: 80, render: (v) => v || "—" },
+            {
+              title: "Status",
+              dataIndex: "latest_status",
+              width: 120,
+              render: (v: string) => {
+                const color = v === "approved" ? "green" : v === "pending_approval" ? "orange" : "blue";
+                return <Tag color={color}>{v ? v.toUpperCase().replace("_", " ") : "UNKNOWN"}</Tag>;
+              },
+            },
+            {
+              title: "Actions",
+              key: "actions",
+              width: 160,
+              render: (_: any, record: PolicySummary) => (
+                <Space size="small" onClick={(e) => e.stopPropagation()}>
+                  {record.latest_status === "pending_approval" && (
+                    <Button size="small" type="primary" ghost onClick={() => onApprovePolicy(record)}>
+                      Approve
+                    </Button>
+                  )}
+                  {record.latest_status === "approved" && record.latest_version > record.active_version && (
+                    <Button size="small" onClick={() => onActivatePolicy(record)}>
+                      Activate
+                    </Button>
+                  )}
+                </Space>
+              ),
+            },
           ]}
           pagination={false}
           locale={{ emptyText: "No policies for this application. Click 'Add Policy' to create one." }}
@@ -640,8 +704,19 @@ permit (
                 style={{ fontFamily: "monospace", fontSize: 12 }}
               />
             </div>
+            {app?.approval_required && (
+              <Alert
+                type="info"
+                showIcon
+                message="Approval Required"
+                description="This application requires approval for policy changes. Checking the box below will submit the policy for approval. Unchecking it will save as Draft."
+                style={{ marginBottom: 12 }}
+              />
+            )}
             <Checkbox checked={editActivate} onChange={(e) => setEditActivate(e.target.checked)}>
-              Activate {selectedPolicy.id === 0 ? "this policy" : "new version"}
+              {app?.approval_required
+                ? "Submit for approval"
+                : `Activate ${selectedPolicy.id === 0 ? "this policy" : "new version"}`}
             </Checkbox>
           </Space>
         )}
@@ -659,6 +734,7 @@ permit (
         onClose={() => setPolicyWizardOpen(false)}
         onSubmit={onPolicyWizardSubmit}
         saving={savingPolicy}
+        approvalRequired={app?.approval_required}
       />
     </Space>
   );

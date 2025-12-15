@@ -40,7 +40,7 @@ func main() {
 	}
 	log.Printf("using namespace id=%d", nsID)
 
-	appID, err := appRepo.Create(ctx, "demo-app", nsID, "Demo application")
+	appID, err := appRepo.Create(ctx, "demo-app", nsID, "Demo application", false)
 	if err != nil {
 		log.Fatalf("create app: %v", err)
 	}
@@ -52,7 +52,7 @@ func main() {
 	resource == Document::"demo-doc"
 );`
 
-	_, _, err = policyRepo.UpsertPolicyWithVersion(ctx, appID, "allow-view", "Demo allow view", policyText, true)
+	_, _, _, err = policyRepo.UpsertPolicyWithVersion(ctx, appID, "allow-view", "Demo allow view", policyText, true)
 	if err != nil {
 		log.Fatalf("seed policy: %v", err)
 	}

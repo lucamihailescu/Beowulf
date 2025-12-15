@@ -49,6 +49,7 @@ type PolicyTemplateWizardProps = {
   onClose: () => void;
   onSubmit: (name: string, description: string, policyText: string, activate: boolean) => Promise<void>;
   saving: boolean;
+  approvalRequired?: boolean;
   entityTypes?: string[];
   actions?: string[];
 };
@@ -350,6 +351,7 @@ export default function PolicyTemplateWizard({
   onClose,
   onSubmit,
   saving,
+  approvalRequired,
 }: PolicyTemplateWizardProps) {
   const [step, setStep] = useState(0);
   const [selectedTemplate, setSelectedTemplate] = useState<PolicyTemplate | null>(null);
@@ -623,8 +625,19 @@ export default function PolicyTemplateWizard({
             </pre>
           </Card>
 
+          {approvalRequired && (
+            <Alert
+              type="info"
+              showIcon
+              message="Approval Required"
+              description="This application requires approval for policy changes. Checking the box below will submit the policy for approval. Unchecking it will save as Draft."
+              style={{ marginBottom: 12 }}
+            />
+          )}
           <Checkbox checked={activate} onChange={(e) => setActivate(e.target.checked)}>
-            Activate this policy immediately
+            {approvalRequired
+              ? "Submit for approval"
+              : "Activate this policy immediately"}
           </Checkbox>
         </Space>
       )}

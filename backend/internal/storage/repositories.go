@@ -108,12 +108,13 @@ func (r *NamespaceRepo) GetByName(ctx context.Context, name string) (*Namespace,
 
 // Application models an onboarded application.
 type Application struct {
-	ID            int64     `json:"id"`
-	Name          string    `json:"name"`
-	NamespaceID   int64     `json:"namespace_id"`
-	NamespaceName string    `json:"namespace_name"`
-	Description   string    `json:"description"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID               int64     `json:"id"`
+	Name             string    `json:"name"`
+	NamespaceID      int64     `json:"namespace_id"`
+	NamespaceName    string    `json:"namespace_name"`
+	Description      string    `json:"description"`
+	ApprovalRequired bool      `json:"approval_required"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 // ApplicationRepo manages application records.
@@ -127,13 +128,13 @@ func NewApplicationRepo(db *DB) *ApplicationRepo {
 }
 
 // Create inserts a new application with a namespace reference.
-func (r *ApplicationRepo) Create(ctx context.Context, name string, namespaceID int64, description string) (int64, error) {
+func (r *ApplicationRepo) Create(ctx context.Context, name string, namespaceID int64, description string, approvalRequired bool) (int64, error) {
 	row := r.db.Writer().QueryRow(ctx, `
-		INSERT INTO applications (name, namespace_id, description)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (name) DO UPDATE SET namespace_id = EXCLUDED.namespace_id, description = EXCLUDED.description
+		INSERT INTO applications (name, namespace_id, description, approval_required)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (name) DO UPDATE SET namespace_id = EXCLUDED.namespace_id, description = EXCLUDED.description, approval_required = EXCLUDED.approval_required
 		RETURNING id
-	`, name, namespaceID, description)
+	`, name, namespaceID, description, approvalRequired)
 	var id int64
 	if err := row.Scan(&id); err != nil {
 		var pgErr *pgconn.PgError
@@ -153,7 +154,7 @@ func (r *ApplicationRepo) Create(ctx context.Context, name string, namespaceID i
 // List returns all applications with their namespace names.
 func (r *ApplicationRepo) List(ctx context.Context) ([]Application, error) {
 	rows, err := r.db.Reader().Query(ctx, `
-		SELECT a.id, a.name, COALESCE(a.namespace_id, 0), COALESCE(n.name, a.namespace, ''), COALESCE(a.description, ''), a.created_at
+		SELECT a.id, a.name, COALESCE(a.namespace_id, 0), COALESCE(n.name, a.namespace, ''), COALESCE(a.description, ''), a.approval_required, a.created_at
 		FROM applications a
 		LEFT JOIN namespaces n ON a.namespace_id = n.id
 		ORDER BY a.created_at DESC
@@ -166,7 +167,7 @@ func (r *ApplicationRepo) List(ctx context.Context) ([]Application, error) {
 	var apps []Application
 	for rows.Next() {
 		var a Application
-		if err := rows.Scan(&a.ID, &a.Name, &a.NamespaceID, &a.NamespaceName, &a.Description, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.Name, &a.NamespaceID, &a.NamespaceName, &a.Description, &a.ApprovalRequired, &a.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan application: %w", err)
 		}
 		apps = append(apps, a)
@@ -189,6 +190,7 @@ type PolicySummary struct {
 	Description   string    `json:"description"`
 	ActiveVersion int       `json:"active_version"`
 	LatestVersion int       `json:"latest_version"`
+	LatestStatus  string    `json:"latest_status"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }
@@ -202,6 +204,8 @@ type PolicyDetails struct {
 	LatestVersion    int       `json:"latest_version"`
 	ActivePolicyText string    `json:"active_policy_text"`
 	LatestPolicyText string    `json:"latest_policy_text"`
+	ActiveStatus     string    `json:"active_status"`
+	LatestStatus     string    `json:"latest_status"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 }
@@ -218,14 +222,19 @@ func (r *PolicyRepo) ListPolicies(ctx context.Context, applicationID int64) ([]P
 			p.id,
 			p.name,
 			COALESCE(p.description, ''),
-			COALESCE(MAX(pv.version), 0) AS latest_version,
-			COALESCE(MAX(CASE WHEN pv.is_active THEN pv.version END), 0) AS active_version,
+			COALESCE(lv.version, 0) AS latest_version,
+			COALESCE(av.version, 0) AS active_version,
+			COALESCE(lv.status, 'approved') AS latest_status,
 			p.created_at,
 			p.updated_at
 		FROM policies p
-		LEFT JOIN policy_versions pv ON pv.policy_id = p.id
+		LEFT JOIN LATERAL (
+			SELECT version, status FROM policy_versions WHERE policy_id = p.id ORDER BY version DESC LIMIT 1
+		) lv ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT version FROM policy_versions WHERE policy_id = p.id AND is_active = TRUE ORDER BY version DESC LIMIT 1
+		) av ON TRUE
 		WHERE p.application_id = $1
-		GROUP BY p.id, p.name, p.description, p.created_at, p.updated_at
 		ORDER BY p.updated_at DESC
 	`, applicationID)
 	if err != nil {
@@ -236,7 +245,7 @@ func (r *PolicyRepo) ListPolicies(ctx context.Context, applicationID int64) ([]P
 	var out []PolicySummary
 	for rows.Next() {
 		var p PolicySummary
-		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.LatestVersion, &p.ActiveVersion, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.LatestVersion, &p.ActiveVersion, &p.LatestStatus, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan policy: %w", err)
 		}
 		out = append(out, p)
@@ -254,30 +263,53 @@ func (r *PolicyRepo) GetPolicy(ctx context.Context, applicationID, policyID int6
 			p.id,
 			p.name,
 			COALESCE(p.description, ''),
-			COALESCE((SELECT pv.version FROM policy_versions pv WHERE pv.policy_id = p.id AND pv.is_active = TRUE ORDER BY pv.version DESC LIMIT 1), 0) AS active_version,
-			COALESCE((SELECT pv.version FROM policy_versions pv WHERE pv.policy_id = p.id ORDER BY pv.version DESC LIMIT 1), 0) AS latest_version,
-			COALESCE((SELECT pv.policy_text FROM policy_versions pv WHERE pv.policy_id = p.id AND pv.is_active = TRUE ORDER BY pv.version DESC LIMIT 1), '') AS active_policy_text,
-			COALESCE((SELECT pv.policy_text FROM policy_versions pv WHERE pv.policy_id = p.id ORDER BY pv.version DESC LIMIT 1), '') AS latest_policy_text,
+			COALESCE(av.version, 0) AS active_version,
+			COALESCE(lv.version, 0) AS latest_version,
+			COALESCE(av.policy_text, '') AS active_policy_text,
+			COALESCE(lv.policy_text, '') AS latest_policy_text,
+			COALESCE(av.status, 'approved') AS active_status,
+			COALESCE(lv.status, 'approved') AS latest_status,
 			p.created_at,
 			p.updated_at
 		FROM policies p
+		LEFT JOIN LATERAL (
+			SELECT version, policy_text, status FROM policy_versions WHERE policy_id = p.id AND is_active = TRUE ORDER BY version DESC LIMIT 1
+		) av ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT version, policy_text, status FROM policy_versions WHERE policy_id = p.id ORDER BY version DESC LIMIT 1
+		) lv ON TRUE
 		WHERE p.application_id = $1 AND p.id = $2
 	`, applicationID, policyID)
 
 	var out PolicyDetails
-	if err := row.Scan(&out.ID, &out.Name, &out.Description, &out.ActiveVersion, &out.LatestVersion, &out.ActivePolicyText, &out.LatestPolicyText, &out.CreatedAt, &out.UpdatedAt); err != nil {
+	if err := row.Scan(&out.ID, &out.Name, &out.Description, &out.ActiveVersion, &out.LatestVersion, &out.ActivePolicyText, &out.LatestPolicyText, &out.ActiveStatus, &out.LatestStatus, &out.CreatedAt, &out.UpdatedAt); err != nil {
 		return PolicyDetails{}, fmt.Errorf("get policy: %w", err)
 	}
 	return out, nil
 }
 
 // UpsertPolicyWithVersion adds a policy version and optionally activates it.
-func (r *PolicyRepo) UpsertPolicyWithVersion(ctx context.Context, applicationID int64, name, description, policyText string, activate bool) (int64, int, error) {
+func (r *PolicyRepo) UpsertPolicyWithVersion(ctx context.Context, applicationID int64, name, description, policyText string, activate bool) (int64, int, string, error) {
 	tx, err := r.db.Writer().Begin(ctx)
 	if err != nil {
-		return 0, 0, fmt.Errorf("begin tx: %w", err)
+		return 0, 0, "", fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
+
+	// Check if approval is required
+	var approvalRequired bool
+	if err := tx.QueryRow(ctx, `SELECT approval_required FROM applications WHERE id = $1`, applicationID).Scan(&approvalRequired); err != nil {
+		return 0, 0, "", fmt.Errorf("check approval required: %w", err)
+	}
+
+	// Determine status and effective activation state
+	status := "approved"
+	if approvalRequired && activate {
+		activate = false
+		status = "pending_approval"
+	} else if !activate {
+		status = "draft"
+	}
 
 	var policyID int64
 	err = tx.QueryRow(ctx, `
@@ -287,7 +319,7 @@ func (r *PolicyRepo) UpsertPolicyWithVersion(ctx context.Context, applicationID 
 		RETURNING id
 	`, applicationID, name, description).Scan(&policyID)
 	if err != nil {
-		return 0, 0, fmt.Errorf("upsert policy: %w", err)
+		return 0, 0, "", fmt.Errorf("upsert policy: %w", err)
 	}
 
 	var nextVersion int
@@ -295,29 +327,29 @@ func (r *PolicyRepo) UpsertPolicyWithVersion(ctx context.Context, applicationID 
 		SELECT COALESCE(MAX(version), 0) + 1 FROM policy_versions WHERE policy_id = $1
 	`, policyID).Scan(&nextVersion)
 	if err != nil {
-		return 0, 0, fmt.Errorf("next version: %w", err)
+		return 0, 0, "", fmt.Errorf("next version: %w", err)
 	}
 
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO policy_versions (policy_id, version, policy_text, is_active)
-		VALUES ($1, $2, $3, $4)
-	`, policyID, nextVersion, policyText, activate); err != nil {
-		return 0, 0, fmt.Errorf("insert policy version: %w", err)
+		INSERT INTO policy_versions (policy_id, version, policy_text, is_active, status)
+		VALUES ($1, $2, $3, $4, $5)
+	`, policyID, nextVersion, policyText, activate, status); err != nil {
+		return 0, 0, "", fmt.Errorf("insert policy version: %w", err)
 	}
 
 	if activate {
 		if _, err := tx.Exec(ctx, `UPDATE policy_versions SET is_active = FALSE WHERE policy_id = $1`, policyID); err != nil {
-			return 0, 0, fmt.Errorf("deactivate policy versions: %w", err)
+			return 0, 0, "", fmt.Errorf("deactivate policy versions: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `UPDATE policy_versions SET is_active = TRUE WHERE policy_id = $1 AND version = $2`, policyID, nextVersion); err != nil {
-			return 0, 0, fmt.Errorf("activate policy version: %w", err)
+			return 0, 0, "", fmt.Errorf("activate policy version: %w", err)
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return 0, 0, fmt.Errorf("commit tx: %w", err)
+		return 0, 0, "", fmt.Errorf("commit tx: %w", err)
 	}
-	return policyID, nextVersion, nil
+	return policyID, nextVersion, status, nil
 }
 
 // ActivePolicies returns active policy texts for the application.
@@ -345,6 +377,66 @@ func (r *PolicyRepo) ActivePolicies(ctx context.Context, applicationID int64) ([
 		return nil, fmt.Errorf("iterate policies: %w", rows.Err())
 	}
 	return out, nil
+}
+
+// ApproveVersion marks a policy version as approved.
+func (r *PolicyRepo) ApproveVersion(ctx context.Context, policyID int64, version int, approver string) error {
+	result, err := r.db.Writer().Exec(ctx, `
+		UPDATE policy_versions
+		SET status = 'approved', approver = $1, approved_at = NOW()
+		WHERE policy_id = $2 AND version = $3
+	`, approver, policyID, version)
+	if err != nil {
+		return fmt.Errorf("approve version: %w", err)
+	}
+	rows := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("policy version not found or update failed")
+	}
+	return nil
+}
+
+// ActivateVersion activates a specific policy version.
+func (r *PolicyRepo) ActivateVersion(ctx context.Context, applicationID, policyID int64, version int) error {
+	tx, err := r.db.Writer().Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Check approval requirements
+	var approvalRequired bool
+	if err := tx.QueryRow(ctx, `SELECT approval_required FROM applications WHERE id = $1`, applicationID).Scan(&approvalRequired); err != nil {
+		return fmt.Errorf("check approval: %w", err)
+	}
+
+	if approvalRequired {
+		var status string
+		if err := tx.QueryRow(ctx, `SELECT status FROM policy_versions WHERE policy_id = $1 AND version = $2`, policyID, version).Scan(&status); err != nil {
+			return fmt.Errorf("check version status: %w", err)
+		}
+		if status != "approved" {
+			return fmt.Errorf("cannot activate version %d: status is '%s', must be 'approved'", version, status)
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `UPDATE policy_versions SET is_active = FALSE WHERE policy_id = $1`, policyID); err != nil {
+		return fmt.Errorf("deactivate policies: %w", err)
+	}
+
+	result, err := tx.Exec(ctx, `UPDATE policy_versions SET is_active = TRUE WHERE policy_id = $1 AND version = $2`, policyID, version)
+	if err != nil {
+		return fmt.Errorf("activate policy: %w", err)
+	}
+	rows := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("version %d not found", version)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit tx: %w", err)
+	}
+	return nil
 }
 
 // EntityRepo fetches entities for applications.

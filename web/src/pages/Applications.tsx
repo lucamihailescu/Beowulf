@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Col, Collapse, Input, Modal, Row, Select, Space, Steps, Table, Tag, Typography } from "antd";
+import { Alert, Button, Card, Checkbox, Col, Collapse, Input, Modal, Row, Select, Space, Steps, Table, Tag, Typography } from "antd";
 import { PlusOutlined, RocketOutlined } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
 import { API_BASE_URL, api, type Application, type Namespace } from "../api";
@@ -20,6 +20,7 @@ export default function Applications() {
   const [name, setName] = useState("");
   const [selectedNamespaceId, setSelectedNamespaceId] = useState<number | undefined>(undefined);
   const [description, setDescription] = useState("");
+  const [approvalRequired, setApprovalRequired] = useState(true);
 
   // New namespace modal
   const [newNamespaceModalOpen, setNewNamespaceModalOpen] = useState(false);
@@ -86,10 +87,11 @@ export default function Applications() {
     }
     setCreatingApp(true);
     try {
-      const created = await api.createApp({ name, namespace_id: selectedNamespaceId, description });
+      const created = await api.createApp({ name, namespace_id: selectedNamespaceId, description, approval_required: approvalRequired });
       setName("");
       setSelectedNamespaceId(undefined);
       setDescription("");
+      setApprovalRequired(false);
       setCreateStep(0);
       await refresh();
       setNotice(`Application "${name}" created successfully.`);
@@ -295,6 +297,11 @@ export default function Applications() {
                           <div>
                             <Typography.Text strong>Description</Typography.Text>
                             <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional description" />
+                          </div>
+                          <div>
+                            <Checkbox checked={approvalRequired} onChange={(e) => setApprovalRequired(e.target.checked)}>
+                              Require Approval for Policies
+                            </Checkbox>
                           </div>
                         </Space>
                       )}

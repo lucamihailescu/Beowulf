@@ -49,9 +49,10 @@ type authorizeResponse struct {
 }
 
 type createAppRequest struct {
-	Name        string `json:"name"`
-	NamespaceID int64  `json:"namespace_id"`
-	Description string `json:"description"`
+	Name             string `json:"name"`
+	NamespaceID      int64  `json:"namespace_id"`
+	Description      string `json:"description"`
+	ApprovalRequired *bool  `json:"approval_required"`
 }
 
 type createNamespaceRequest struct {
@@ -177,6 +178,8 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 	r.Post("/v1/apps/{id}/policies", api.handleCreatePolicy)
 	r.Get("/v1/apps/{id}/policies", api.handleListPolicies)
 	r.Get("/v1/apps/{id}/policies/{policyId}", api.handleGetPolicy)
+	r.Post("/v1/apps/{id}/policies/{policyId}/versions/{version}/approve", api.handleApprovePolicy)
+	r.Post("/v1/apps/{id}/policies/{policyId}/versions/{version}/activate", api.handleActivatePolicy)
 
 	r.Post("/v1/apps/{id}/entities", api.handleUpsertEntity)
 	r.Get("/v1/apps/{id}/entities", api.handleListEntities)
@@ -373,7 +376,12 @@ func (a *API) handleCreateApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := a.apps.Create(r.Context(), req.Name, req.NamespaceID, req.Description)
+	approvalRequired := true
+	if req.ApprovalRequired != nil {
+		approvalRequired = *req.ApprovalRequired
+	}
+
+	id, err := a.apps.Create(r.Context(), req.Name, req.NamespaceID, req.Description, approvalRequired)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -383,9 +391,10 @@ func (a *API) handleCreateApp(w http.ResponseWriter, r *http.Request) {
 	// Log application creation to audit trail
 	if a.audits != nil {
 		auditCtx := map[string]any{
-			"name":         req.Name,
-			"namespace_id": req.NamespaceID,
-			"description":  req.Description,
+			"name":              req.Name,
+			"namespace_id":      req.NamespaceID,
+			"description":       req.Description,
+			"approval_required": approvalRequired,
 		}
 		_ = a.audits.Log(r.Context(), &id, "api", "application.create", req.Name, "", auditCtx)
 	}
@@ -511,7 +520,7 @@ func (a *API) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = hasActiveSchema
 
-	policyID, version, err := a.policies.UpsertPolicyWithVersion(r.Context(), appID, req.Name, req.Description, req.PolicyText, req.Activate)
+	policyID, version, status, err := a.policies.UpsertPolicyWithVersion(r.Context(), appID, req.Name, req.Description, req.PolicyText, req.Activate)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -528,11 +537,12 @@ func (a *API) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 			"policy_name": req.Name,
 			"version":     version,
 			"activated":   req.Activate,
+			"status":      status,
 		}
 		_ = a.audits.Log(r.Context(), &appID, "api", auditAction, req.Name, "", auditCtx)
 	}
 
-	json.NewEncoder(w).Encode(map[string]any{"policy_id": policyID, "version": version})
+	json.NewEncoder(w).Encode(map[string]any{"policy_id": policyID, "version": version, "status": status})
 }
 
 // @Summary List Policies
@@ -594,6 +604,115 @@ func (a *API) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	json.NewEncoder(w).Encode(item)
+}
+
+// @Summary Approve Policy Version
+// @Description Approves a policy version
+// @Tags Policies
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Security BearerAuth
+// @Param id path int true "Application ID"
+// @Param policyId path int true "Policy ID"
+// @Param version path int true "Version"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Router /v1/apps/{id}/policies/{policyId}/versions/{version}/approve [post]
+func (a *API) handleApprovePolicy(w http.ResponseWriter, r *http.Request) {
+	appID, _ := parseIDParam(r, "id")
+	policyID, err := parseIDParam(r, "policyId")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid policy id"})
+		return
+	}
+	version64, err := parseIDParam(r, "version")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid version"})
+		return
+	}
+	version := int(version64)
+
+	user := GetUserFromContext(r.Context())
+	approver := "unknown"
+	if user != nil {
+		approver = user.ID
+	}
+
+	if err := a.policies.ApproveVersion(r.Context(), policyID, version, approver); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Audit
+	if a.audits != nil {
+		auditCtx := map[string]any{
+			"version":   version,
+			"policy_id": policyID,
+		}
+		_ = a.audits.Log(r.Context(), &appID, "api", "policy.approve", strconv.FormatInt(policyID, 10), "", auditCtx)
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{"status": "approved"})
+}
+
+// @Summary Activate Policy Version
+// @Description Activates a policy version
+// @Tags Policies
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Security BearerAuth
+// @Param id path int true "Application ID"
+// @Param policyId path int true "Policy ID"
+// @Param version path int true "Version"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Router /v1/apps/{id}/policies/{policyId}/versions/{version}/activate [post]
+func (a *API) handleActivatePolicy(w http.ResponseWriter, r *http.Request) {
+	appID, err := parseIDParam(r, "id")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid app id"})
+		return
+	}
+	policyID, err := parseIDParam(r, "policyId")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid policy id"})
+		return
+	}
+	version64, err := parseIDParam(r, "version")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid version"})
+		return
+	}
+	version := int(version64)
+
+	if err := a.policies.ActivateVersion(r.Context(), appID, policyID, version); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	if a.cache != nil {
+		_ = a.cache.InvalidateApp(r.Context(), appID)
+	}
+
+	// Audit
+	if a.audits != nil {
+		auditCtx := map[string]any{
+			"version":   version,
+			"policy_id": policyID,
+		}
+		_ = a.audits.Log(r.Context(), &appID, "api", "policy.activate", strconv.FormatInt(policyID, 10), "", auditCtx)
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{"status": "active"})
 }
 
 // @Summary Upsert Entity

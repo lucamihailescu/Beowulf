@@ -455,6 +455,138 @@ const docTemplate = `{
                 }
             }
         },
+        "/v1/apps/{id}/policies/{policyId}/versions/{version}/activate": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    },
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Activates a policy version",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Policies"
+                ],
+                "summary": "Activate Policy Version",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Application ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Policy ID",
+                        "name": "policyId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Version",
+                        "name": "version",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/apps/{id}/policies/{policyId}/versions/{version}/approve": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    },
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Approves a policy version",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Policies"
+                ],
+                "summary": "Approve Policy Version",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Application ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Policy ID",
+                        "name": "policyId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Version",
+                        "name": "version",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/v1/apps/{id}/schemas": {
             "get": {
                 "security": [
@@ -1073,6 +1205,9 @@ const docTemplate = `{
         "httpserver.createAppRequest": {
             "type": "object",
             "properties": {
+                "approval_required": {
+                    "type": "boolean"
+                },
                 "description": {
                     "type": "string"
                 },
@@ -1168,6 +1303,9 @@ const docTemplate = `{
         "storage.Application": {
             "type": "object",
             "properties": {
+                "approval_required": {
+                    "type": "boolean"
+                },
                 "created_at": {
                     "type": "string"
                 },
@@ -1254,6 +1392,9 @@ const docTemplate = `{
                 "active_policy_text": {
                     "type": "string"
                 },
+                "active_status": {
+                    "type": "string"
+                },
                 "active_version": {
                     "type": "integer"
                 },
@@ -1267,6 +1408,9 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "latest_policy_text": {
+                    "type": "string"
+                },
+                "latest_status": {
                     "type": "string"
                 },
                 "latest_version": {
@@ -1294,6 +1438,9 @@ const docTemplate = `{
                 },
                 "id": {
                     "type": "integer"
+                },
+                "latest_status": {
+                    "type": "string"
                 },
                 "latest_version": {
                     "type": "integer"

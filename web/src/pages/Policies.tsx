@@ -151,8 +151,14 @@ export default function Policies() {
     }
     setSavingPolicy(true);
     try {
-      await api.createPolicy(selectedAppId, { name, description, policy_text: policyText, activate });
-      setNotice("Policy saved successfully!");
+      const res = await api.createPolicy(selectedAppId, { name, description, policy_text: policyText, activate });
+      if (res.status === "pending_approval") {
+        setNotice("Policy saved but requires approval before activation.");
+      } else if (res.status === "draft") {
+        setNotice("Policy saved as draft.");
+      } else {
+        setNotice("Policy saved successfully!");
+      }
       setName("");
       setDescription("");
       setPolicyText(DEFAULT_POLICY);
@@ -192,19 +198,49 @@ export default function Policies() {
     setSavingExisting(false);
   }
 
+  async function onApprovePolicy(policy: PolicySummary) {
+    if (selectedAppId === "") return;
+    setError("");
+    setNotice("");
+    try {
+      await api.approvePolicy(selectedAppId, policy.id, policy.latest_version);
+      setNotice(`Policy "${policy.name}" v${policy.latest_version} approved.`);
+      setPolicies(await api.listPolicies(selectedAppId));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function onActivatePolicy(policy: PolicySummary) {
+    if (selectedAppId === "") return;
+    setError("");
+    setNotice("");
+    try {
+      await api.activatePolicy(selectedAppId, policy.id, policy.latest_version);
+      setNotice(`Policy "${policy.name}" v${policy.latest_version} activated.`);
+      setPolicies(await api.listPolicies(selectedAppId));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   async function onSaveExistingPolicy() {
     if (!selectedPolicy || selectedAppId === "") return;
     setError("");
     setNotice("");
     setSavingExisting(true);
     try {
-      await api.createPolicy(selectedAppId, {
+      const res = await api.createPolicy(selectedAppId, {
         name: selectedPolicy.name,
         description: editDescription,
         policy_text: editPolicyText,
         activate: editActivate,
       });
-      setNotice("Policy updated (new version created).");
+      if (res.status === "pending_approval") {
+        setNotice("Policy updated but requires approval before activation.");
+      } else {
+        setNotice("Policy updated (new version created).");
+      }
       const items = await api.listPolicies(selectedAppId);
       setPolicies(items);
       closePolicyModal();
@@ -279,16 +315,44 @@ export default function Policies() {
                 { title: "Name", dataIndex: "name", render: (v) => <Typography.Text strong>{v}</Typography.Text> },
                 { title: "Description", dataIndex: "description", render: (v) => <Typography.Text type="secondary">{v || "—"}</Typography.Text> },
                 { 
-                  title: "Active Version", 
+                  title: "Active", 
                   dataIndex: "active_version", 
-                  width: 120, 
+                  width: 80, 
                   render: (v) => v ? <Tag color="green">v{v}</Tag> : <Tag>—</Tag>
                 },
                 { 
-                  title: "Latest Version", 
+                  title: "Latest", 
                   dataIndex: "latest_version", 
-                  width: 120, 
+                  width: 80, 
                   render: (v) => v ? <Tag>v{v}</Tag> : "—"
+                },
+                {
+                  title: "Status",
+                  dataIndex: "latest_status",
+                  width: 120,
+                  render: (v: string) => {
+                    const color = v === "approved" ? "green" : v === "pending_approval" ? "orange" : "blue";
+                    return <Tag color={color}>{v ? v.toUpperCase().replace("_", " ") : "UNKNOWN"}</Tag>;
+                  },
+                },
+                {
+                  title: "Actions",
+                  key: "actions",
+                  width: 160,
+                  render: (_: any, record: PolicySummary) => (
+                    <Space size="small" onClick={(e) => e.stopPropagation()}>
+                      {record.latest_status === "pending_approval" && (
+                        <Button size="small" type="primary" ghost onClick={() => onApprovePolicy(record)}>
+                          Approve
+                        </Button>
+                      )}
+                      {record.latest_status === "approved" && record.latest_version > record.active_version && (
+                        <Button size="small" onClick={() => onActivatePolicy(record)}>
+                          Activate
+                        </Button>
+                      )}
+                    </Space>
+                  ),
                 },
               ]}
             />
@@ -354,8 +418,17 @@ export default function Policies() {
                   />
                 </div>
 
+                {selectedApp?.approval_required && (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="Approval Required"
+                    description="This application requires approval for policy changes. Checking the box below will submit the policy for approval."
+                    style={{ marginBottom: 12 }}
+                  />
+                )}
                 <Checkbox checked={activate} onChange={(e) => setActivate(e.target.checked)}>
-                  Activate this policy immediately
+                  {selectedApp?.approval_required ? "Submit for approval" : "Activate this policy immediately"}
                 </Checkbox>
 
                 <Button 
@@ -607,8 +680,17 @@ export default function Policies() {
                 style={{ fontFamily: "'Fira Code', 'Monaco', monospace", fontSize: 12 }}
               />
             </div>
+            {selectedApp?.approval_required && (
+              <Alert
+                type="info"
+                showIcon
+                message="Approval Required"
+                description="This application requires approval for policy changes."
+                style={{ marginBottom: 12 }}
+              />
+            )}
             <Checkbox checked={editActivate} onChange={(e) => setEditActivate(e.target.checked)}>
-              Activate this version immediately
+              {selectedApp?.approval_required ? "Submit for approval" : "Activate this version immediately"}
             </Checkbox>
           </Space>
         )}

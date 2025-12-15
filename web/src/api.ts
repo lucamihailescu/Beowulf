@@ -22,6 +22,7 @@ export type Application = {
   namespace_id: number;
   namespace_name: string;
   description: string;
+  approval_required: boolean;
   created_at: string;
 };
 
@@ -29,6 +30,7 @@ export type CreateApplicationRequest = {
   name: string;
   namespace_id: number;
   description?: string;
+  approval_required?: boolean;
 };
 
 export type EntityRef = { type: string; id: string };
@@ -53,6 +55,7 @@ export type PolicySummary = {
   description: string;
   active_version: number;
   latest_version: number;
+  latest_status: string;
   created_at: string;
   updated_at: string;
 };
@@ -65,6 +68,8 @@ export type PolicyDetails = {
   latest_version: number;
   active_policy_text: string;
   latest_policy_text: string;
+  active_status: string;
+  latest_status: string;
   created_at: string;
   updated_at: string;
 };
@@ -251,10 +256,22 @@ export const api = {
     });
   },
 
-  createPolicy(appId: number, payload: CreatePolicyRequest): Promise<{ policy_id: number; version: number }> {
-    return request<{ policy_id: number; version: number }>(`/v1/apps/${appId}/policies`, {
+  createPolicy(appId: number, payload: CreatePolicyRequest): Promise<{ policy_id: number; version: number; status: string }> {
+    return request<{ policy_id: number; version: number; status: string }>(`/v1/apps/${appId}/policies`, {
       method: "POST",
       body: JSON.stringify(payload),
+    });
+  },
+
+  approvePolicy(appId: number, policyId: number, version: number): Promise<void> {
+    return request<void>(`/v1/apps/${appId}/policies/${policyId}/versions/${version}/approve`, {
+      method: "POST",
+    });
+  },
+
+  activatePolicy(appId: number, policyId: number, version: number): Promise<void> {
+    return request<void>(`/v1/apps/${appId}/policies/${policyId}/versions/${version}/activate`, {
+      method: "POST",
     });
   },
 
