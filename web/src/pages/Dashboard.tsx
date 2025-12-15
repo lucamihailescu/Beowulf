@@ -34,7 +34,7 @@ export default function Dashboard() {
           Dashboard
         </Typography.Title>
         <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
-          Welcome to the Cedar Authorization Portal. Manage applications, policies, and test authorization decisions.
+          Welcome to the Enterprise Policy Management portal. Manage applications, policies, and test authorization decisions.
         </Typography.Paragraph>
       </div>
 

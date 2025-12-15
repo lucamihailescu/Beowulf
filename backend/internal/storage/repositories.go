@@ -736,7 +736,7 @@ type AuditLog struct {
 	Action        string          `json:"action"`
 	Target        string          `json:"target,omitempty"`
 	Decision      string          `json:"decision,omitempty"`
-	Context       json.RawMessage `json:"context,omitempty"`
+	Context       json.RawMessage `json:"context,omitempty" swaggertype:"object"`
 	CreatedAt     time.Time       `json:"created_at"`
 }
 

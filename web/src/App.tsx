@@ -66,7 +66,7 @@ function LoginPage() {
     }}>
       <Result
         icon={<SafetyCertificateOutlined style={{ color: token.colorPrimary }} />}
-        title="Cedar Authorization Portal"
+        title="Enterprise Policy Management"
         subTitle="Please sign in to continue"
         extra={
           <Space direction="vertical" size={16}>
@@ -180,13 +180,13 @@ function AppShell() {
           <Space direction="vertical" size={8} style={{ width: "100%" }}>
             <Typography.Title level={5} style={{ margin: 0 }}>
               <Link to="/" style={{ color: "inherit" }}>
-                {collapsed ? "Cedar" : "Cedar Auth Portal"}
+                {collapsed ? "EPM" : "Enterprise Policy Mgmt"}
               </Link>
             </Typography.Title>
             {collapsed ? null : (
               <Space size={8} wrap>
-                <Tag color="blue">Portal</Tag>
-                <Tag color="purple">PDP</Tag>
+                <Tag color="blue">Policy</Tag>
+                <Tag color="purple">Mgmt</Tag>
                 <Tag color="green">Cedar</Tag>
               </Space>
             )}

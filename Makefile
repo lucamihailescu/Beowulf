@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: backend-run backend-lint backend-migrate backend-seed web-install web-dev web-build compose-up compose-down e2e-demo
+.PHONY: backend-run backend-lint backend-migrate backend-seed backend-docs web-install web-dev web-build compose-up compose-down e2e-demo
 
 backend-run:
 	cd backend && go run ./cmd/server
@@ -13,6 +13,9 @@ backend-seed:
 
 backend-lint:
 	cd backend && golangci-lint run ./...
+
+backend-docs:
+	cd backend && go run github.com/swaggo/swag/cmd/swag@latest init -g internal/httpserver/router.go --output docs
 
 web-install:
 	cd web && npm install

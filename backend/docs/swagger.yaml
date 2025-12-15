@@ -1,0 +1,850 @@
+basePath: /
+definitions:
+  authz.PermissionEntry:
+    properties:
+      actions:
+        items:
+          type: string
+        type: array
+      conditions:
+        type: string
+      effect:
+        type: string
+      policy_id:
+        type: string
+      resource_ids:
+        items:
+          type: string
+        type: array
+      resource_types:
+        items:
+          type: string
+        type: array
+    type: object
+  authz.PermissionsResponse:
+    properties:
+      effective_actions:
+        items:
+          type: string
+        type: array
+      group_memberships:
+        items:
+          type: string
+        type: array
+      permissions:
+        items:
+          $ref: '#/definitions/authz.PermissionEntry'
+        type: array
+      principal:
+        $ref: '#/definitions/authz.Reference'
+    type: object
+  authz.Reference:
+    properties:
+      id:
+        type: string
+      type:
+        type: string
+    type: object
+  httpserver.UserContext:
+    properties:
+      email:
+        description: Email address
+        type: string
+      groups:
+        description: Group memberships from token
+        items:
+          type: string
+        type: array
+      id:
+        description: User principal name or email
+        type: string
+      name:
+        description: Display name
+        type: string
+    type: object
+  httpserver.activateSchemaRequest:
+    properties:
+      version:
+        type: integer
+    type: object
+  httpserver.auditListResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/storage.AuditLog'
+        type: array
+      total:
+        type: integer
+    type: object
+  httpserver.authorizeRequest:
+    properties:
+      action:
+        $ref: '#/definitions/httpserver.entityReference'
+      application_id:
+        type: integer
+      context:
+        additionalProperties: {}
+        type: object
+      principal:
+        $ref: '#/definitions/httpserver.entityReference'
+      resource:
+        $ref: '#/definitions/httpserver.entityReference'
+    type: object
+  httpserver.authorizeResponse:
+    properties:
+      decision:
+        type: string
+      errors:
+        items:
+          type: string
+        type: array
+      reasons:
+        items:
+          type: string
+        type: array
+    type: object
+  httpserver.createAppRequest:
+    properties:
+      description:
+        type: string
+      name:
+        type: string
+      namespace_id:
+        type: integer
+    type: object
+  httpserver.createNamespaceRequest:
+    properties:
+      description:
+        type: string
+      name:
+        type: string
+    type: object
+  httpserver.createPolicyRequest:
+    properties:
+      activate:
+        type: boolean
+      description:
+        type: string
+      name:
+        type: string
+      policy_text:
+        type: string
+    type: object
+  httpserver.createSchemaRequest:
+    properties:
+      activate:
+        type: boolean
+      schema_text:
+        type: string
+    type: object
+  httpserver.entityReference:
+    properties:
+      id:
+        type: string
+      type:
+        type: string
+    type: object
+  httpserver.healthResponse:
+    properties:
+      cedar_version:
+        type: string
+      status:
+        type: string
+    type: object
+  httpserver.upsertEntityRequest:
+    properties:
+      attributes:
+        type: object
+      id:
+        type: string
+      parents:
+        items:
+          $ref: '#/definitions/storage.ParentRef'
+        type: array
+      type:
+        type: string
+    type: object
+  storage.Application:
+    properties:
+      created_at:
+        type: string
+      description:
+        type: string
+      id:
+        type: integer
+      name:
+        type: string
+      namespace_id:
+        type: integer
+      namespace_name:
+        type: string
+    type: object
+  storage.AuditLog:
+    properties:
+      action:
+        type: string
+      actor:
+        type: string
+      application_id:
+        type: integer
+      context:
+        type: object
+      created_at:
+        type: string
+      decision:
+        type: string
+      id:
+        type: integer
+      target:
+        type: string
+    type: object
+  storage.Namespace:
+    properties:
+      created_at:
+        type: string
+      description:
+        type: string
+      id:
+        type: integer
+      name:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  storage.ParentRef:
+    properties:
+      id:
+        type: string
+      type:
+        type: string
+    type: object
+  storage.PolicyDetails:
+    properties:
+      active_policy_text:
+        type: string
+      active_version:
+        type: integer
+      created_at:
+        type: string
+      description:
+        type: string
+      id:
+        type: integer
+      latest_policy_text:
+        type: string
+      latest_version:
+        type: integer
+      name:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  storage.PolicySummary:
+    properties:
+      active_version:
+        type: integer
+      created_at:
+        type: string
+      description:
+        type: string
+      id:
+        type: integer
+      latest_version:
+        type: integer
+      name:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  storage.Schema:
+    properties:
+      active:
+        type: boolean
+      application_id:
+        type: integer
+      created_at:
+        type: string
+      id:
+        type: integer
+      schema_text:
+        type: string
+      version:
+        type: integer
+    type: object
+host: localhost:8080
+info:
+  contact:
+    email: support@example.com
+    name: API Support
+  description: API for managing Cedar policies, entities, and performing authorization
+    checks.
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  termsOfService: http://swagger.io/terms/
+  title: Enterprise Policy Management API
+  version: "1.0"
+paths:
+  /health:
+    get:
+      description: Checks if the service is running
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/httpserver.healthResponse'
+      summary: Health Check
+      tags:
+      - System
+  /v1/apps:
+    get:
+      description: Returns a list of all registered applications
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/storage.Application'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: List Applications
+      tags:
+      - Applications
+    post:
+      consumes:
+      - application/json
+      description: Registers a new application
+      parameters:
+      - description: Application Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/httpserver.createAppRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              format: int64
+              type: integer
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Create Application
+      tags:
+      - Applications
+  /v1/apps/{id}/entities:
+    get:
+      description: Returns a list of entities for an application
+      parameters:
+      - description: Application ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: List Entities
+      tags:
+      - Entities
+    post:
+      consumes:
+      - application/json
+      description: Creates or updates an entity
+      parameters:
+      - description: Application ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Entity Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/httpserver.upsertEntityRequest'
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Upsert Entity
+      tags:
+      - Entities
+  /v1/apps/{id}/permissions:
+    get:
+      description: Calculates effective permissions for a principal
+      parameters:
+      - description: Application ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Principal Type (e.g. User)
+        in: query
+        name: principal_type
+        required: true
+        type: string
+      - description: Principal ID
+        in: query
+        name: principal_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/authz.PermissionsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: List Permissions
+      tags:
+      - Authorization
+  /v1/apps/{id}/policies:
+    get:
+      description: Returns a list of policies for an application
+      parameters:
+      - description: Application ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/storage.PolicySummary'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: List Policies
+      tags:
+      - Policies
+    post:
+      consumes:
+      - application/json
+      description: Creates a new policy version or updates an existing one
+      parameters:
+      - description: Application ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Policy Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/httpserver.createPolicyRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Create/Update Policy
+      tags:
+      - Policies
+  /v1/apps/{id}/policies/{policyId}:
+    get:
+      description: Returns details of a specific policy
+      parameters:
+      - description: Application ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Policy ID
+        in: path
+        name: policyId
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/storage.PolicyDetails'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Get Policy Details
+      tags:
+      - Policies
+  /v1/apps/{id}/schemas:
+    get:
+      description: Returns a list of schema versions
+      parameters:
+      - description: Application ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/storage.Schema'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: List Schemas
+      tags:
+      - Schemas
+    post:
+      consumes:
+      - application/json
+      description: Creates a new schema version
+      parameters:
+      - description: Application ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Schema Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/httpserver.createSchemaRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Create Schema
+      tags:
+      - Schemas
+  /v1/apps/{id}/schemas/activate:
+    post:
+      consumes:
+      - application/json
+      description: Sets a specific schema version as active
+      parameters:
+      - description: Application ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Activation Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/httpserver.activateSchemaRequest'
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Activate Schema
+      tags:
+      - Schemas
+  /v1/apps/{id}/schemas/active:
+    get:
+      description: Returns the currently active schema
+      parameters:
+      - description: Application ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/storage.Schema'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Get Active Schema
+      tags:
+      - Schemas
+  /v1/audit:
+    get:
+      description: Returns a list of audit log entries
+      parameters:
+      - description: Filter by Application ID
+        in: query
+        name: application_id
+        type: integer
+      - description: Filter by Action
+        in: query
+        name: action
+        type: string
+      - description: Filter by Decision (allow/deny)
+        in: query
+        name: decision
+        type: string
+      - description: Max results (default 50)
+        in: query
+        name: limit
+        type: integer
+      - description: Offset results
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/httpserver.auditListResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: List Audit Logs
+      tags:
+      - Audit
+  /v1/authorize:
+    post:
+      consumes:
+      - application/json
+      description: Performs a Cedar authorization check
+      parameters:
+      - description: Authorization Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/httpserver.authorizeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/httpserver.authorizeResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Evaluate Authorization
+      tags:
+      - Authorization
+  /v1/me:
+    get:
+      description: Returns the currently authenticated user
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/httpserver.UserContext'
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Get Current User
+      tags:
+      - System
+  /v1/namespaces:
+    get:
+      description: Returns a list of all namespaces
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/storage.Namespace'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: List Namespaces
+      tags:
+      - Namespaces
+    post:
+      consumes:
+      - application/json
+      description: Creates a new namespace
+      parameters:
+      - description: Namespace Details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/httpserver.createNamespaceRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              format: int64
+              type: integer
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Create Namespace
+      tags:
+      - Namespaces
+schemes:
+- http
+- https
+securityDefinitions:
+  ApiKeyAuth:
+    in: header
+    name: X-API-Key
+    type: apiKey
+  BearerAuth:
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"
