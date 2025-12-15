@@ -94,3 +94,5 @@ temp/
 *.tmp
 *.temp
 *.bak
+
+tests/python/venv/
