@@ -1,3 +1,8 @@
+export type HealthResponse = {
+  status: string;
+  cedar_version?: string;
+};
+
 export type Namespace = {
   id: number;
   name: string;
@@ -312,5 +317,9 @@ export const api = {
     if (filter?.offset) params.set("offset", String(filter.offset));
     const qs = params.toString();
     return request<AuditListResponse>(`/v1/audit/${qs ? `?${qs}` : ""}`);
+  },
+
+  checkHealth(): Promise<HealthResponse> {
+    return request<HealthResponse>("/health");
   },
 };

@@ -7,13 +7,24 @@ import { api, type Application } from "../api";
 export default function Dashboard() {
   const [apps, setApps] = useState<Application[]>([]);
   const [loading, setLoading] = useState(true);
+  const [cedarVersion, setCedarVersion] = useState<string>("Unknown");
 
   useEffect(() => {
     setLoading(true);
+    // Fetch apps
     api.listApps()
       .then(setApps)
       .catch(() => {})
       .finally(() => setLoading(false));
+
+    // Fetch health/version
+    api.checkHealth()
+      .then((res) => {
+        if (res.cedar_version) {
+          setCedarVersion(res.cedar_version);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   return (
@@ -61,7 +72,7 @@ export default function Dashboard() {
           <Card>
             <Statistic
               title="Cedar Version"
-              value="4.x"
+              value={cedarVersion}
               prefix={<FileProtectOutlined />}
             />
           </Card>

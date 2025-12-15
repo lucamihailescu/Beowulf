@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"runtime/debug"
 	"strconv"
 	"time"
 
@@ -22,7 +23,8 @@ type CacheInvalidator interface {
 }
 
 type healthResponse struct {
-	Status string `json:"status"`
+	Status       string `json:"status"`
+	CedarVersion string `json:"cedar_version,omitempty"`
 }
 
 type authorizeRequest struct {
@@ -116,7 +118,21 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(healthResponse{Status: "ok"})
+
+		version := "unknown"
+		if info, ok := debug.ReadBuildInfo(); ok {
+			for _, dep := range info.Deps {
+				if dep.Path == "github.com/cedar-policy/cedar-go" {
+					version = dep.Version
+					break
+				}
+			}
+		}
+
+		_ = json.NewEncoder(w).Encode(healthResponse{
+			Status:       "ok",
+			CedarVersion: version,
+		})
 	})
 
 	// Get current authenticated user
