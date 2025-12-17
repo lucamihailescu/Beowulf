@@ -4,11 +4,98 @@ This directory contains client SDKs for integrating with the Enterprise Policy M
 
 ## Supported Languages
 
-| Language | gRPC | REST |
-|----------|------|------|
-| Python | ✅ | ✅ |
-| JavaScript/TypeScript | ✅ | ✅ |
-| C# (.NET) | ✅ | ✅ |
+| Language | gRPC | REST | MCP SDK |
+|----------|------|------|---------|
+| Python | ✅ | ✅ | ✅ |
+| JavaScript/TypeScript | ✅ | ✅ | - |
+| C# (.NET) | ✅ | ✅ | - |
+
+## MCP (Model Context Protocol) Integration
+
+The Python MCP SDK provides authorization helpers for AI/LLM tool servers:
+
+```python
+from clients.python.mcp import CedarMCPAuthorizer, CedarMCPConfig
+
+# Configure the authorizer
+config = CedarMCPConfig(
+    cedar_url="http://localhost:8080",
+    app_id=1,
+    cache_ttl_seconds=60,
+    enable_sse=True  # Real-time cache invalidation
+)
+
+authorizer = CedarMCPAuthorizer(config)
+
+# Filter available tools for a user
+available_tools = authorizer.filter_tools(all_tools, user_id="alice")
+
+# Check tool authorization
+if authorizer.authorize_tool("read_document", user_id="alice"):
+    result = execute_tool(...)
+
+# Get all entitlements (for IdP integration)
+entitlements = authorizer.get_user_entitlements(
+    username="alice",
+    groups=["analysts", "team-alpha"]
+)
+
+# Use decorator for automatic authorization
+@authorizer.require_authorization(action="read_document")
+async def read_document(user_id: str, doc_id: str):
+    ...
+```
+
+### IdP Integration
+
+The `/v1/entitlements` endpoint allows Identity Providers to query user permissions:
+
+```python
+import requests
+
+response = requests.post(
+    "http://localhost:8080/v1/entitlements",
+    json={
+        "application_id": 1,
+        "username": "alice",
+        "groups": ["analysts", "team-alpha"],
+        "include_inherited": True
+    },
+    headers={"Authorization": "Bearer <token>"}
+)
+
+# Response:
+# {
+#   "username": "alice",
+#   "application_id": 1,
+#   "application_name": "demo-app",
+#   "entitlements": [
+#     {"effect": "permit", "actions": ["view", "edit"], "resource_types": ["Document"]}
+#   ],
+#   "group_entitlements": {
+#     "analysts": [{"effect": "permit", "actions": ["read"], ...}]
+#   }
+# }
+```
+
+### Real-Time Policy Updates (SSE)
+
+Subscribe to policy changes for cache invalidation:
+
+```python
+from clients.python.mcp import SSESubscriber
+
+def on_policy_update(event):
+    print(f"Policy updated: {event.event_type} for app {event.app_id}")
+    cache.invalidate(event.app_id)
+
+subscriber = SSESubscriber(
+    url="http://localhost:8080/v1/events",
+    on_event=on_policy_update,
+    app_id=1  # Optional filter
+)
+subscriber.start()
+```
 
 ## Quick Start
 

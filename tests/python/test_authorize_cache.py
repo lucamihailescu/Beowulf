@@ -4,7 +4,20 @@ import time
 
 BASE_URL = "http://localhost:8080"
 
-def test_authorize_cache(app_id="1", principal_id="alice", action_id="view", resource_id="doc-123"):
+def get_app_id():
+    try:
+        resp = requests.get(f"{BASE_URL}/v1/apps/")
+        if resp.ok and resp.json():
+            return resp.json()[0]['id']
+    except:
+        pass
+    return 1
+
+def test_authorize_cache(app_id=None, principal_id="alice", action_id="view", resource_id="doc-123"):
+    if app_id is None:
+        app_id = get_app_id()
+    print(f"Using App ID: {app_id}")
+
     auth_url = f"{BASE_URL}/v1/authorize"
     
     payload = {
@@ -33,10 +46,12 @@ def test_authorize_cache(app_id="1", principal_id="alice", action_id="view", res
         "activate": True
     }
     
+    policy_id = None
     try:
         resp = requests.post(create_policy_url, json=policy_payload)
         if resp.status_code == 200:
             print(" -> Policy updated successfully. Cache should be invalidated.")
+            policy_id = resp.json().get("policy_id")
         else:
             print(f" -> Policy update failed: {resp.status_code} {resp.text}")
     except Exception as e:
@@ -47,6 +62,19 @@ def test_authorize_cache(app_id="1", principal_id="alice", action_id="view", res
     for i in range(1, 4):
         make_auth_request(auth_url, payload, f"Post-Update {i}")
         time.sleep(0.1)
+
+    # Cleanup
+    if policy_id:
+        print(f"\n[Cleanup] Deleting test policy {policy_id}...")
+        del_url = f"{BASE_URL}/v1/apps/{app_id}/policies/{policy_id}"
+        try:
+            del_resp = requests.delete(del_url)
+            if del_resp.status_code == 200:
+                print(" -> Policy deleted successfully.")
+            else:
+                print(f" -> Delete failed: {del_resp.status_code} {del_resp.text}")
+        except Exception as e:
+            print(f" -> Delete failed with exception: {e}")
 
 def make_auth_request(url, payload, label):
     try:

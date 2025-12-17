@@ -224,7 +224,7 @@ func (r *PolicyRepo) ListPolicies(ctx context.Context, applicationID int64) ([]P
 			COALESCE(p.description, ''),
 			COALESCE(lv.version, 0) AS latest_version,
 			COALESCE(av.version, 0) AS active_version,
-			COALESCE(lv.status, 'approved') AS latest_status,
+			CASE WHEN p.status = 'pending_deletion' THEN 'pending_deletion' ELSE COALESCE(lv.status, 'approved') END AS latest_status,
 			p.created_at,
 			p.updated_at
 		FROM policies p
@@ -234,7 +234,7 @@ func (r *PolicyRepo) ListPolicies(ctx context.Context, applicationID int64) ([]P
 		LEFT JOIN LATERAL (
 			SELECT version FROM policy_versions WHERE policy_id = p.id AND is_active = TRUE ORDER BY version DESC LIMIT 1
 		) av ON TRUE
-		WHERE p.application_id = $1
+		WHERE p.application_id = $1 AND p.status != 'deleted'
 		ORDER BY p.updated_at DESC
 	`, applicationID)
 	if err != nil {
@@ -431,6 +431,58 @@ func (r *PolicyRepo) ActivateVersion(ctx context.Context, applicationID, policyI
 	rows := result.RowsAffected()
 	if rows == 0 {
 		return fmt.Errorf("version %d not found", version)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit tx: %w", err)
+	}
+	return nil
+}
+
+// DeletePolicy initiates deletion of a policy.
+func (r *PolicyRepo) DeletePolicy(ctx context.Context, appID, policyID int64) (string, error) {
+	var approvalRequired bool
+	if err := r.db.Reader().QueryRow(ctx, `SELECT approval_required FROM applications WHERE id = $1`, appID).Scan(&approvalRequired); err != nil {
+		return "", fmt.Errorf("check approval: %w", err)
+	}
+
+	newStatus := "deleted"
+	if approvalRequired {
+		newStatus = "pending_deletion"
+	}
+
+	if _, err := r.db.Writer().Exec(ctx, `UPDATE policies SET status = $1 WHERE id = $2`, newStatus, policyID); err != nil {
+		return "", fmt.Errorf("update policy status: %w", err)
+	}
+
+	if newStatus == "deleted" {
+		if _, err := r.db.Writer().Exec(ctx, `UPDATE policy_versions SET is_active = FALSE WHERE policy_id = $1`, policyID); err != nil {
+			return "", fmt.Errorf("deactivate versions: %w", err)
+		}
+	}
+
+	return newStatus, nil
+}
+
+// ApprovePolicyDeletion approves a pending deletion.
+func (r *PolicyRepo) ApprovePolicyDeletion(ctx context.Context, policyID int64, approver string) error {
+	tx, err := r.db.Writer().Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	res, err := tx.Exec(ctx, `UPDATE policies SET status = 'deleted' WHERE id = $1 AND status = 'pending_deletion'`, policyID)
+	if err != nil {
+		return fmt.Errorf("update policy status: %w", err)
+	}
+	rows := res.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("policy not found or not pending deletion")
+	}
+
+	if _, err := tx.Exec(ctx, `UPDATE policy_versions SET is_active = FALSE WHERE policy_id = $1`, policyID); err != nil {
+		return fmt.Errorf("deactivate versions: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {

@@ -224,6 +224,37 @@ export default function Policies() {
     }
   }
 
+  async function onDeletePolicy(policy: PolicySummary) {
+    if (selectedAppId === "") return;
+    if (!confirm(`Are you sure you want to delete policy "${policy.name}"?`)) return;
+    setError("");
+    setNotice("");
+    try {
+      const res = await api.deletePolicy(selectedAppId, policy.id);
+      if (res.status === "pending_deletion") {
+        setNotice(`Deletion of policy "${policy.name}" requested. Requires approval.`);
+      } else {
+        setNotice(`Policy "${policy.name}" deleted.`);
+      }
+      setPolicies(await api.listPolicies(selectedAppId));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function onApproveDeletePolicy(policy: PolicySummary) {
+    if (selectedAppId === "") return;
+    setError("");
+    setNotice("");
+    try {
+      await api.approveDeletePolicy(selectedAppId, policy.id);
+      setNotice(`Deletion of policy "${policy.name}" approved.`);
+      setPolicies(await api.listPolicies(selectedAppId));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   async function onSaveExistingPolicy() {
     if (!selectedPolicy || selectedAppId === "") return;
     setError("");
@@ -331,7 +362,7 @@ export default function Policies() {
                   dataIndex: "latest_status",
                   width: 120,
                   render: (v: string) => {
-                    const color = v === "approved" ? "green" : v === "pending_approval" ? "orange" : "blue";
+                    const color = v === "approved" ? "green" : v === "pending_approval" ? "orange" : v === "pending_deletion" ? "red" : "blue";
                     return <Tag color={color}>{v ? v.toUpperCase().replace("_", " ") : "UNKNOWN"}</Tag>;
                   },
                 },
@@ -346,9 +377,19 @@ export default function Policies() {
                           Approve
                         </Button>
                       )}
+                      {record.latest_status === "pending_deletion" && (
+                        <Button size="small" type="primary" danger onClick={() => onApproveDeletePolicy(record)}>
+                          Approve Delete
+                        </Button>
+                      )}
                       {record.latest_status === "approved" && record.latest_version > record.active_version && (
                         <Button size="small" onClick={() => onActivatePolicy(record)}>
                           Activate
+                        </Button>
+                      )}
+                      {record.latest_status !== "pending_deletion" && (
+                        <Button size="small" danger onClick={() => onDeletePolicy(record)}>
+                          Delete
                         </Button>
                       )}
                     </Space>

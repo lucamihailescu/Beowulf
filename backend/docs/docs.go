@@ -453,6 +453,122 @@ const docTemplate = `{
                         }
                     }
                 }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    },
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Deletes a policy (or requests deletion)",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Policies"
+                ],
+                "summary": "Delete Policy",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Application ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Policy ID",
+                        "name": "policyId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/apps/{id}/policies/{policyId}/approve-delete": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    },
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Approves a pending policy deletion",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Policies"
+                ],
+                "summary": "Approve Policy Deletion",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Application ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Policy ID",
+                        "name": "policyId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
             }
         },
         "/v1/apps/{id}/policies/{policyId}/versions/{version}/activate": {
@@ -914,6 +1030,111 @@ const docTemplate = `{
                 }
             }
         },
+        "/v1/entitlements": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    },
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns all entitlements/permissions for a user and their groups within an application.\nThis endpoint is designed for Identity Provider (IdP) integration, allowing external\nsystems to query what a user can do based on their identity and group memberships.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Entitlements"
+                ],
+                "summary": "Get Entitlements for IdP Integration",
+                "parameters": [
+                    {
+                        "description": "Entitlements Request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/httpserver.entitlementsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/httpserver.entitlementsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/events": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    },
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Server-Sent Events endpoint for real-time policy and entity change notifications",
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "Events"
+                ],
+                "summary": "Subscribe to Policy Events (SSE)",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Filter events by Application ID",
+                        "name": "app_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "SSE stream",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/v1/me": {
             "get": {
                 "security": [
@@ -1254,6 +1475,97 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "schema_text": {
+                    "type": "string"
+                }
+            }
+        },
+        "httpserver.entitlementEntry": {
+            "type": "object",
+            "properties": {
+                "actions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "conditions": {
+                    "type": "string"
+                },
+                "effect": {
+                    "type": "string"
+                },
+                "resource_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "resource_types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "httpserver.entitlementsRequest": {
+            "type": "object",
+            "properties": {
+                "application_id": {
+                    "description": "ApplicationID is the Cedar application to query",
+                    "type": "integer"
+                },
+                "application_name": {
+                    "description": "ApplicationName can be used instead of ApplicationID",
+                    "type": "string"
+                },
+                "groups": {
+                    "description": "Groups is an optional list of group IDs the user belongs to",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "include_inherited": {
+                    "description": "IncludeInherited includes permissions inherited from group memberships",
+                    "type": "boolean"
+                },
+                "username": {
+                    "description": "Username is the principal user ID (e.g., \"alice\", \"jsmith\")",
+                    "type": "string"
+                }
+            }
+        },
+        "httpserver.entitlementsResponse": {
+            "type": "object",
+            "properties": {
+                "application_id": {
+                    "description": "ApplicationID is the resolved application ID",
+                    "type": "integer"
+                },
+                "application_name": {
+                    "description": "ApplicationName is the application name",
+                    "type": "string"
+                },
+                "entitlements": {
+                    "description": "Entitlements are the permissions granted to this user",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/httpserver.entitlementEntry"
+                    }
+                },
+                "group_entitlements": {
+                    "description": "GroupEntitlements are permissions inherited from groups",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/definitions/httpserver.entitlementEntry"
+                        }
+                    }
+                },
+                "username": {
+                    "description": "Username is the queried principal",
                     "type": "string"
                 }
             }

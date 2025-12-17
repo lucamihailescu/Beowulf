@@ -7,7 +7,7 @@ import (
 
 // PermissionEntry represents a single permission derived from a policy.
 type PermissionEntry struct {
-	PolicyID      string   `json:"policy_id"`
+	PolicyID      string   `json:"policy_id,omitempty"`
 	Effect        string   `json:"effect"`
 	Actions       []string `json:"actions"`
 	ResourceTypes []string `json:"resource_types"`

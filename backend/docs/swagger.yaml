@@ -139,6 +139,69 @@ definitions:
       schema_text:
         type: string
     type: object
+  httpserver.entitlementEntry:
+    properties:
+      actions:
+        items:
+          type: string
+        type: array
+      conditions:
+        type: string
+      effect:
+        type: string
+      resource_ids:
+        items:
+          type: string
+        type: array
+      resource_types:
+        items:
+          type: string
+        type: array
+    type: object
+  httpserver.entitlementsRequest:
+    properties:
+      application_id:
+        description: ApplicationID is the Cedar application to query
+        type: integer
+      application_name:
+        description: ApplicationName can be used instead of ApplicationID
+        type: string
+      groups:
+        description: Groups is an optional list of group IDs the user belongs to
+        items:
+          type: string
+        type: array
+      include_inherited:
+        description: IncludeInherited includes permissions inherited from group memberships
+        type: boolean
+      username:
+        description: Username is the principal user ID (e.g., "alice", "jsmith")
+        type: string
+    type: object
+  httpserver.entitlementsResponse:
+    properties:
+      application_id:
+        description: ApplicationID is the resolved application ID
+        type: integer
+      application_name:
+        description: ApplicationName is the application name
+        type: string
+      entitlements:
+        description: Entitlements are the permissions granted to this user
+        items:
+          $ref: '#/definitions/httpserver.entitlementEntry'
+        type: array
+      group_entitlements:
+        additionalProperties:
+          items:
+            $ref: '#/definitions/httpserver.entitlementEntry'
+          type: array
+        description: GroupEntitlements are permissions inherited from groups
+        type: object
+      username:
+        description: Username is the queried principal
+        type: string
+    type: object
   httpserver.entityReference:
     properties:
       id:
@@ -532,6 +595,42 @@ paths:
       tags:
       - Policies
   /v1/apps/{id}/policies/{policyId}:
+    delete:
+      consumes:
+      - application/json
+      description: Deletes a policy (or requests deletion)
+      parameters:
+      - description: Application ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Policy ID
+        in: path
+        name: policyId
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Delete Policy
+      tags:
+      - Policies
     get:
       description: Returns details of a specific policy
       parameters:
@@ -562,6 +661,43 @@ paths:
       - ApiKeyAuth: []
       - BearerAuth: []
       summary: Get Policy Details
+      tags:
+      - Policies
+  /v1/apps/{id}/policies/{policyId}/approve-delete:
+    post:
+      consumes:
+      - application/json
+      description: Approves a pending policy deletion
+      parameters:
+      - description: Application ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Policy ID
+        in: path
+        name: policyId
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Approve Policy Deletion
       tags:
       - Policies
   /v1/apps/{id}/policies/{policyId}/versions/{version}/activate:
@@ -850,6 +986,74 @@ paths:
       summary: Evaluate Authorization
       tags:
       - Authorization
+  /v1/entitlements:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Returns all entitlements/permissions for a user and their groups within an application.
+        This endpoint is designed for Identity Provider (IdP) integration, allowing external
+        systems to query what a user can do based on their identity and group memberships.
+      parameters:
+      - description: Entitlements Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/httpserver.entitlementsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/httpserver.entitlementsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Get Entitlements for IdP Integration
+      tags:
+      - Entitlements
+  /v1/events:
+    get:
+      description: Server-Sent Events endpoint for real-time policy and entity change
+        notifications
+      parameters:
+      - description: Filter events by Application ID
+        in: query
+        name: app_id
+        type: integer
+      produces:
+      - text/event-stream
+      responses:
+        "200":
+          description: SSE stream
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Subscribe to Policy Events (SSE)
+      tags:
+      - Events
   /v1/me:
     get:
       description: Returns the currently authenticated user

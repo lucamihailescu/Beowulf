@@ -21,21 +21,30 @@ ALTER TABLE applications ADD COLUMN IF NOT EXISTS namespace_id BIGINT;
 UPDATE applications a
 SET namespace_id = n.id
 FROM namespaces n
-WHERE a.namespace = n.name;
+WHERE a.namespace = n.name AND a.namespace_id IS NULL;
 
--- Add foreign key constraint (drop first if exists to make idempotent)
-ALTER TABLE applications DROP CONSTRAINT IF EXISTS fk_applications_namespace;
-ALTER TABLE applications
-ADD CONSTRAINT fk_applications_namespace
-FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
+-- Add foreign key constraint (idempotent with exception handling)
+DO $$
+BEGIN
+    ALTER TABLE applications
+    ADD CONSTRAINT fk_applications_namespace
+    FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
 
 -- Drop the old unique constraint on namespace column (if exists)
 ALTER TABLE applications DROP CONSTRAINT IF EXISTS applications_namespace_key;
 
 -- Keep namespace column for backward compatibility but make it nullable
-ALTER TABLE applications ALTER COLUMN namespace DROP NOT NULL;
+DO $$
+BEGIN
+    ALTER TABLE applications ALTER COLUMN namespace DROP NOT NULL;
+EXCEPTION
+    WHEN others THEN NULL;
+END $$;
 
--- Create trigger for namespaces updated_at
+-- Create trigger for namespaces updated_at (idempotent)
 DROP TRIGGER IF EXISTS set_namespaces_updated_at ON namespaces;
 CREATE TRIGGER set_namespaces_updated_at
 BEFORE UPDATE ON namespaces
@@ -43,4 +52,3 @@ FOR EACH ROW EXECUTE PROCEDURE set_updated_at();
 
 -- Create index for faster lookups
 CREATE INDEX IF NOT EXISTS idx_applications_namespace_id ON applications(namespace_id);
-

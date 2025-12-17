@@ -88,6 +88,45 @@ type auditListResponse struct {
 	Total int                `json:"total"`
 }
 
+// entitlementsRequest is the request body for IdP entitlements lookup.
+// An IdP (Identity Provider) can call this endpoint to get all entitlements
+// for a user and their groups within an application.
+type entitlementsRequest struct {
+	// ApplicationID is the Cedar application to query
+	ApplicationID int64 `json:"application_id"`
+	// ApplicationName can be used instead of ApplicationID
+	ApplicationName string `json:"application_name,omitempty"`
+	// Username is the principal user ID (e.g., "alice", "jsmith")
+	Username string `json:"username"`
+	// Groups is an optional list of group IDs the user belongs to
+	Groups []string `json:"groups,omitempty"`
+	// IncludeInherited includes permissions inherited from group memberships
+	IncludeInherited bool `json:"include_inherited,omitempty"`
+}
+
+// entitlementsResponse contains the entitlements for a user.
+type entitlementsResponse struct {
+	// Username is the queried principal
+	Username string `json:"username"`
+	// ApplicationID is the resolved application ID
+	ApplicationID int64 `json:"application_id"`
+	// ApplicationName is the application name
+	ApplicationName string `json:"application_name"`
+	// Entitlements are the permissions granted to this user
+	Entitlements []entitlementEntry `json:"entitlements"`
+	// GroupEntitlements are permissions inherited from groups
+	GroupEntitlements map[string][]entitlementEntry `json:"group_entitlements,omitempty"`
+}
+
+// entitlementEntry represents a single entitlement/permission.
+type entitlementEntry struct {
+	Effect        string   `json:"effect"`
+	Actions       []string `json:"actions"`
+	ResourceTypes []string `json:"resource_types"`
+	ResourceIDs   []string `json:"resource_ids,omitempty"`
+	Conditions    string   `json:"conditions,omitempty"`
+}
+
 // AuditLogger is used to record audit events.
 type AuditLogger interface {
 	Log(ctx context.Context, applicationID *int64, actor, action, target, decision string, auditContext map[string]any) error
@@ -109,6 +148,7 @@ type API struct {
 	audits     *storage.AuditRepo
 	namespaces *storage.NamespaceRepo
 	cache      CacheInvalidator
+	sseBroker  *SSEBroker
 }
 
 // NewRouter configures the HTTP router with basic endpoints.
@@ -130,6 +170,9 @@ type API struct {
 // @in header
 // @name Authorization
 func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.ApplicationRepo, policies *storage.PolicyRepo, entities *storage.EntityRepo, schemas *storage.SchemaRepo, audits *storage.AuditRepo, namespaces *storage.NamespaceRepo, cache CacheInvalidator) http.Handler {
+	// Create SSE broker for real-time event streaming
+	sseBroker := NewSSEBroker()
+
 	api := &API{
 		cfg:        cfg,
 		authzSvc:   authzSvc,
@@ -140,6 +183,7 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 		audits:     audits,
 		namespaces: namespaces,
 		cache:      cache,
+		sseBroker:  sseBroker,
 	}
 
 	r := chi.NewRouter()
@@ -180,6 +224,8 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 	r.Get("/v1/apps/{id}/policies/{policyId}", api.handleGetPolicy)
 	r.Post("/v1/apps/{id}/policies/{policyId}/versions/{version}/approve", api.handleApprovePolicy)
 	r.Post("/v1/apps/{id}/policies/{policyId}/versions/{version}/activate", api.handleActivatePolicy)
+	r.Delete("/v1/apps/{id}/policies/{policyId}", api.handleDeletePolicy)
+	r.Post("/v1/apps/{id}/policies/{policyId}/approve-delete", api.handleApproveDeletePolicy)
 
 	r.Post("/v1/apps/{id}/entities", api.handleUpsertEntity)
 	r.Get("/v1/apps/{id}/entities", api.handleListEntities)
@@ -192,6 +238,12 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 	})
 
 	r.Get("/v1/apps/{id}/permissions", api.handleListPermissions)
+
+	// IdP Integration: Get entitlements for a user/groups
+	r.Post("/v1/entitlements", api.handleGetEntitlements)
+
+	// SSE: Real-time policy update events
+	r.Get("/v1/events", api.handleSSEEvents)
 
 	r.Route("/v1/audit", func(r chi.Router) {
 		r.Get("/", api.handleListAuditLogs)
@@ -530,6 +582,11 @@ func (a *API) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 		_ = a.cache.InvalidateApp(r.Context(), appID)
 	}
 
+	// Publish SSE event for real-time updates
+	if a.sseBroker != nil {
+		a.sseBroker.PublishPolicyUpdate(appID, "created")
+	}
+
 	// Log policy creation/update to audit trail
 	if a.audits != nil {
 		auditAction := "policy.create"
@@ -703,6 +760,11 @@ func (a *API) handleActivatePolicy(w http.ResponseWriter, r *http.Request) {
 		_ = a.cache.InvalidateApp(r.Context(), appID)
 	}
 
+	// Publish SSE event for real-time updates
+	if a.sseBroker != nil {
+		a.sseBroker.PublishPolicyUpdate(appID, "activated")
+	}
+
 	// Audit
 	if a.audits != nil {
 		auditCtx := map[string]any{
@@ -713,6 +775,99 @@ func (a *API) handleActivatePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(map[string]string{"status": "active"})
+}
+
+// @Summary Delete Policy
+// @Description Deletes a policy (or requests deletion)
+// @Tags Policies
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Security BearerAuth
+// @Param id path int true "Application ID"
+// @Param policyId path int true "Policy ID"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Router /v1/apps/{id}/policies/{policyId} [delete]
+func (a *API) handleDeletePolicy(w http.ResponseWriter, r *http.Request) {
+	appID, _ := parseIDParam(r, "id")
+	policyID, err := parseIDParam(r, "policyId")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid policy id"})
+		return
+	}
+
+	status, err := a.policies.DeletePolicy(r.Context(), appID, policyID)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	if a.cache != nil && status == "deleted" {
+		_ = a.cache.InvalidateApp(r.Context(), appID)
+	}
+
+	// Publish SSE event for real-time updates
+	if a.sseBroker != nil {
+		a.sseBroker.PublishPolicyUpdate(appID, "deleted")
+	}
+
+	if a.audits != nil {
+		_ = a.audits.Log(r.Context(), &appID, "api", "policy.delete", strconv.FormatInt(policyID, 10), "", map[string]any{"status": status})
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{"status": status})
+}
+
+// @Summary Approve Policy Deletion
+// @Description Approves a pending policy deletion
+// @Tags Policies
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Security BearerAuth
+// @Param id path int true "Application ID"
+// @Param policyId path int true "Policy ID"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Router /v1/apps/{id}/policies/{policyId}/approve-delete [post]
+func (a *API) handleApproveDeletePolicy(w http.ResponseWriter, r *http.Request) {
+	appID, _ := parseIDParam(r, "id")
+	policyID, err := parseIDParam(r, "policyId")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid policy id"})
+		return
+	}
+
+	user := GetUserFromContext(r.Context())
+	approver := "unknown"
+	if user != nil {
+		approver = user.ID
+	}
+
+	if err := a.policies.ApprovePolicyDeletion(r.Context(), policyID, approver); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	if a.cache != nil {
+		_ = a.cache.InvalidateApp(r.Context(), appID)
+	}
+
+	// Publish SSE event for real-time updates
+	if a.sseBroker != nil {
+		a.sseBroker.PublishPolicyUpdate(appID, "deleted")
+	}
+
+	if a.audits != nil {
+		_ = a.audits.Log(r.Context(), &appID, "api", "policy.approve_delete", strconv.FormatInt(policyID, 10), "", nil)
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
 }
 
 // @Summary Upsert Entity
@@ -754,6 +909,11 @@ func (a *API) handleUpsertEntity(w http.ResponseWriter, r *http.Request) {
 	}
 	if a.cache != nil {
 		_ = a.cache.InvalidateApp(r.Context(), appID)
+	}
+
+	// Publish SSE event for real-time updates
+	if a.sseBroker != nil {
+		a.sseBroker.PublishEntityUpdate(appID)
 	}
 
 	// Log entity upsert to audit trail
@@ -1008,6 +1168,14 @@ func (a *API) handleListPermissions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Filter out PolicyID unless debug mode is enabled
+	debug := r.URL.Query().Get("debug") == "true"
+	if !debug && result != nil {
+		for i := range result.Permissions {
+			result.Permissions[i].PolicyID = ""
+		}
+	}
+
 	json.NewEncoder(w).Encode(result)
 }
 
@@ -1086,4 +1254,141 @@ func (a *entityGroupAdapter) GetGroupMemberships(ctx context.Context, applicatio
 		result[i] = authz.GroupRef{Type: p.Type, ID: p.ID}
 	}
 	return result, nil
+}
+
+// @Summary Get Entitlements for IdP Integration
+// @Description Returns all entitlements/permissions for a user and their groups within an application.
+// @Description This endpoint is designed for Identity Provider (IdP) integration, allowing external
+// @Description systems to query what a user can do based on their identity and group memberships.
+// @Tags Entitlements
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Security BearerAuth
+// @Param request body entitlementsRequest true "Entitlements Request"
+// @Success 200 {object} entitlementsResponse
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /v1/entitlements [post]
+func (a *API) handleGetEntitlements(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	var req entitlementsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	// Validate required fields
+	if req.Username == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "username is required"})
+		return
+	}
+
+	// Resolve application ID
+	var appID int64
+	var appName string
+	if req.ApplicationID > 0 {
+		appID = req.ApplicationID
+		// Get app name
+		apps, err := a.apps.List(r.Context())
+		if err == nil {
+			for _, app := range apps {
+				if app.ID == appID {
+					appName = app.Name
+					break
+				}
+			}
+		}
+	} else if req.ApplicationName != "" {
+		// Lookup by name
+		apps, err := a.apps.List(r.Context())
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": "failed to lookup application"})
+			return
+		}
+		for _, app := range apps {
+			if app.Name == req.ApplicationName {
+				appID = app.ID
+				appName = app.Name
+				break
+			}
+		}
+		if appID == 0 {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{"error": "application not found"})
+			return
+		}
+	} else {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "application_id or application_name is required"})
+		return
+	}
+
+	// Create permissions service
+	groupProvider := &entityGroupAdapter{entities: a.entities}
+	permSvc := authz.NewPermissionsService(a.policies, groupProvider)
+
+	// Get user's direct entitlements
+	userResult, err := permSvc.ListPermissions(r.Context(), appID, "User", req.Username)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Convert to entitlement entries
+	userEntitlements := make([]entitlementEntry, 0)
+	if userResult != nil {
+		for _, p := range userResult.Permissions {
+			userEntitlements = append(userEntitlements, entitlementEntry{
+				Effect:        p.Effect,
+				Actions:       p.Actions,
+				ResourceTypes: p.ResourceTypes,
+				ResourceIDs:   p.ResourceIDs,
+				Conditions:    p.Conditions,
+			})
+		}
+	}
+
+	// Get group entitlements if groups are provided
+	groupEntitlements := make(map[string][]entitlementEntry)
+	if req.IncludeInherited && len(req.Groups) > 0 {
+		for _, groupID := range req.Groups {
+			groupResult, err := permSvc.ListPermissions(r.Context(), appID, "Group", groupID)
+			if err != nil {
+				continue // Skip groups that fail
+			}
+			if groupResult != nil && len(groupResult.Permissions) > 0 {
+				entries := make([]entitlementEntry, len(groupResult.Permissions))
+				for i, p := range groupResult.Permissions {
+					entries[i] = entitlementEntry{
+						Effect:        p.Effect,
+						Actions:       p.Actions,
+						ResourceTypes: p.ResourceTypes,
+						ResourceIDs:   p.ResourceIDs,
+						Conditions:    p.Conditions,
+					}
+				}
+				groupEntitlements[groupID] = entries
+			}
+		}
+	}
+
+	// Build response
+	resp := entitlementsResponse{
+		Username:        req.Username,
+		ApplicationID:   appID,
+		ApplicationName: appName,
+		Entitlements:    userEntitlements,
+	}
+	if len(groupEntitlements) > 0 {
+		resp.GroupEntitlements = groupEntitlements
+	}
+
+	json.NewEncoder(w).Encode(resp)
 }

@@ -275,6 +275,18 @@ export const api = {
     });
   },
 
+  deletePolicy(appId: number, policyId: number): Promise<{ status: string }> {
+    return request<{ status: string }>(`/v1/apps/${appId}/policies/${policyId}`, {
+      method: "DELETE",
+    });
+  },
+
+  approveDeletePolicy(appId: number, policyId: number): Promise<void> {
+    return request<void>(`/v1/apps/${appId}/policies/${policyId}/approve-delete`, {
+      method: "POST",
+    });
+  },
+
   listPolicies(appId: number): Promise<PolicySummary[]> {
     return request<PolicySummary[]>(`/v1/apps/${appId}/policies`);
   },
