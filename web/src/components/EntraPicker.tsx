@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Select, Space, Tag, Spin, Alert, Typography, Tabs, Avatar, Tooltip } from "antd";
-import { UserOutlined, TeamOutlined, SearchOutlined } from "@ant-design/icons";
+import { UserOutlined, TeamOutlined, SearchOutlined, LoadingOutlined } from "@ant-design/icons";
 import { api, EntraUser, EntraGroup, EntraStatus } from "../api";
 
 // Simple debounce implementation to avoid lodash dependency
@@ -39,6 +39,7 @@ export function EntraPicker({
   allowedTypes = ["User", "Group"],
 }: EntraPickerProps) {
   const [entraStatus, setEntraStatus] = useState<EntraStatus | null>(null);
+  const [statusLoading, setStatusLoading] = useState(true);
   const [loading, setLoading] = useState(false);
   const [users, setUsers] = useState<EntraUser[]>([]);
   const [groups, setGroups] = useState<EntraGroup[]>([]);
@@ -46,15 +47,27 @@ export function EntraPicker({
   const [activeTab, setActiveTab] = useState<"User" | "Group">(
     allowedTypes.includes("User") ? "User" : "Group"
   );
+  const [dropdownOpen, setDropdownOpen] = useState(false);
 
   // Check Entra configuration status
   useEffect(() => {
-    api.entra.getStatus().then(setEntraStatus).catch(console.error);
+    setStatusLoading(true);
+    api.entra.getStatus()
+      .then((status) => {
+        console.log("EntraPicker: Entra status:", status);
+        setEntraStatus(status);
+      })
+      .catch((err) => {
+        console.error("EntraPicker: Failed to get Entra status:", err);
+        setEntraStatus({ configured: false, tenant_id: "" });
+      })
+      .finally(() => setStatusLoading(false));
   }, []);
 
   // Debounced search function
   const performSearch = useCallback(
     debounce(async (query: string, type: "User" | "Group") => {
+      console.log("EntraPicker: Searching", type, "for:", query);
       if (!query || query.length < 2) {
         if (type === "User") setUsers([]);
         else setGroups([]);
@@ -65,13 +78,15 @@ export function EntraPicker({
       try {
         if (type === "User") {
           const result = await api.entra.searchUsers(query, 15);
+          console.log("EntraPicker: User results:", result);
           setUsers(result.users || []);
         } else {
           const result = await api.entra.searchGroups(query, 15);
+          console.log("EntraPicker: Group results:", result);
           setGroups(result.groups || []);
         }
       } catch (err) {
-        console.error("Entra search failed:", err);
+        console.error("EntraPicker: Search failed:", err);
       } finally {
         setLoading(false);
       }
@@ -81,12 +96,18 @@ export function EntraPicker({
 
   // Trigger search when query or tab changes
   useEffect(() => {
-    performSearch(searchQuery, activeTab);
-  }, [searchQuery, activeTab, performSearch]);
+    if (dropdownOpen) {
+      performSearch(searchQuery, activeTab);
+    }
+  }, [searchQuery, activeTab, performSearch, dropdownOpen]);
 
-  const handleSelect = (selectedValue: string, option: any) => {
-    console.log("EntraPicker handleSelect:", selectedValue);
-    // Parse the selected value (format: "type::id::displayName::detail")
+  const handleSearch = (value: string) => {
+    console.log("EntraPicker: onSearch called with:", value);
+    setSearchQuery(value);
+  };
+
+  const handleSelect = (selectedValue: string) => {
+    console.log("EntraPicker: handleSelect:", selectedValue);
     const parts = selectedValue.split("::");
     if (parts.length < 3) {
       console.error("Invalid selection format:", selectedValue);
@@ -104,17 +125,16 @@ export function EntraPicker({
     if (mode === "single") {
       onChange?.([newSelection]);
     } else {
-      // Check if already selected
       const exists = value.some((v) => v.type === type && v.id === id);
       if (!exists) {
         onChange?.([...value, newSelection]);
       }
     }
     
-    // Clear search
     setSearchQuery("");
     setUsers([]);
     setGroups([]);
+    setDropdownOpen(false);
   };
 
   const handleDeselect = (deselectedValue: string) => {
@@ -126,6 +146,16 @@ export function EntraPicker({
     onChange?.([]);
     setSearchQuery("");
   };
+
+  // Show loading state while checking Entra status
+  if (statusLoading) {
+    return (
+      <Space>
+        <Spin indicator={<LoadingOutlined spin />} size="small" />
+        <Text type="secondary">Checking Entra ID configuration...</Text>
+      </Space>
+    );
+  }
 
   if (!entraStatus?.configured) {
     return (
@@ -183,28 +213,10 @@ export function EntraPicker({
         style={{ marginBottom: 8 }}
         items={[
           ...(allowedTypes.includes("User")
-            ? [
-                {
-                  key: "User",
-                  label: (
-                    <span>
-                      <UserOutlined /> Users
-                    </span>
-                  ),
-                },
-              ]
+            ? [{ key: "User", label: <span><UserOutlined /> Users</span> }]
             : []),
           ...(allowedTypes.includes("Group")
-            ? [
-                {
-                  key: "Group",
-                  label: (
-                    <span>
-                      <TeamOutlined /> Groups
-                    </span>
-                  ),
-                },
-              ]
+            ? [{ key: "Group", label: <span><TeamOutlined /> Groups</span> }]
             : []),
         ]}
       />
@@ -217,10 +229,18 @@ export function EntraPicker({
         showSearch
         filterOption={false}
         searchValue={searchQuery}
-        onSearch={setSearchQuery}
+        onSearch={handleSearch}
         onSelect={handleSelect}
         onDeselect={handleDeselect}
         onClear={handleClear}
+        open={dropdownOpen}
+        onDropdownVisibleChange={(open) => {
+          console.log("EntraPicker: dropdown open:", open);
+          setDropdownOpen(open);
+          if (open && searchQuery.length >= 2) {
+            performSearch(searchQuery, activeTab);
+          }
+        }}
         value={mode === "multiple" ? selectedValues : (selectedValues.length > 0 ? selectedValues[0] : undefined)}
         notFoundContent={
           loading ? (
@@ -318,4 +338,3 @@ export function insertPrincipalIntoPolicy(
 }
 
 export default EntraPicker;
-

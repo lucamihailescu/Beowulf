@@ -57,77 +57,147 @@ type PolicyTemplateWizardProps = {
 };
 
 const POLICY_TEMPLATES: PolicyTemplate[] = [
+  // ========== USER-BASED TEMPLATES ==========
   {
-    id: "allow-all-admins",
-    name: "Admin Full Access",
-    description: "Grant full access to all resources for admin group members",
+    id: "user-full-access",
+    name: "User Full Access",
+    description: "Grant a specific user full access to all resources",
+    icon: <UserOutlined />,
+    category: "rbac",
+    variables: [
+      {
+        key: "userId",
+        label: "User",
+        description: "Select a user from Entra ID or enter a user ID manually",
+        type: "entra-user",
+        placeholder: "john.doe@company.com",
+        required: true,
+      },
+    ],
+    generatePolicy: (values) => `// User Full Access Policy
+// User ${values.userId} has full access to all resources
+
+permit (
+  principal == User::"${values.userId}",
+  action,
+  resource
+);`,
+  },
+  {
+    id: "user-resource-access",
+    name: "User Resource Access",
+    description: "Grant a user specific actions on specific resource types",
+    icon: <UserOutlined />,
+    category: "rbac",
+    variables: [
+      {
+        key: "userId",
+        label: "User",
+        description: "Select a user from Entra ID or enter a user ID manually",
+        type: "entra-user",
+        placeholder: "john.doe@company.com",
+        required: true,
+      },
+      {
+        key: "actions",
+        label: "Actions (comma-separated)",
+        description: "Actions the user can perform (e.g., view, edit, delete)",
+        type: "text",
+        placeholder: "view, edit",
+        required: true,
+      },
+      {
+        key: "resourceType",
+        label: "Resource Type",
+        description: "The type of resource (leave empty for all types)",
+        type: "text",
+        placeholder: "Document",
+        required: false,
+      },
+      {
+        key: "resourceId",
+        label: "Resource ID (optional)",
+        description: "Specific resource ID (leave empty for all resources of this type)",
+        type: "text",
+        placeholder: "doc-123",
+        required: false,
+      },
+    ],
+    generatePolicy: (values) => {
+      const actions = (values.actions || "").split(",").map((a) => a.trim()).filter(Boolean);
+      const hasResourceType = values.resourceType?.trim();
+      const hasResourceId = values.resourceId?.trim();
+      const userId = values.userId || "<user>";
+      
+      let resourceClause = "resource";
+      if (hasResourceId && hasResourceType) {
+        resourceClause = `resource == ${values.resourceType}::"${values.resourceId}"`;
+      } else if (hasResourceType) {
+        resourceClause = `resource is ${values.resourceType}`;
+      }
+      
+      if (actions.length === 0) {
+        return `// User Resource Access Policy
+// Configure actions to generate the policy
+
+permit (
+  principal == User::"${userId}",
+  action == Action::"<action>",
+  ${resourceClause}
+);`;
+      }
+      
+      if (actions.length === 1) {
+        return `// User Resource Access Policy
+// User ${userId} can ${actions[0]} ${hasResourceType || "all"} resources
+
+permit (
+  principal == User::"${userId}",
+  action == Action::"${actions[0]}",
+  ${resourceClause}
+);`;
+      }
+      
+      return `// User Resource Access Policy
+// User ${userId} can perform specified actions on ${hasResourceType || "all"} resources
+
+${actions.map((action) => `permit (
+  principal == User::"${userId}",
+  action == Action::"${action}",
+  ${resourceClause}
+);`).join("\n\n")}`;
+    },
+  },
+  // ========== GROUP-BASED TEMPLATES ==========
+  {
+    id: "group-full-access",
+    name: "Group Full Access",
+    description: "Grant full access to all resources for group members",
     icon: <LockOutlined />,
     category: "rbac",
     variables: [
       {
-        key: "adminGroup",
-        label: "Admin Group",
+        key: "groupId",
+        label: "Group",
         description: "Select a group from Entra ID or enter a group ID manually",
         type: "entra-group",
         placeholder: "admins",
         required: true,
       },
     ],
-    generatePolicy: (values) => `// Admin Full Access Policy
-// Members of the ${values.adminGroup} group have full access to all resources
+    generatePolicy: (values) => `// Group Full Access Policy
+// Members of the ${values.groupId} group have full access to all resources
 
 permit (
-  principal in Group::"${values.adminGroup}",
+  principal in Group::"${values.groupId}",
   action,
   resource
 );`,
   },
   {
-    id: "owner-access",
-    name: "Owner Access",
-    description: "Allow users to access resources they own (via owner attribute)",
-    icon: <UserOutlined />,
-    category: "ownership",
-    variables: [
-      {
-        key: "actions",
-        label: "Allowed Actions",
-        description: "Actions the owner can perform",
-        type: "text",
-        placeholder: "view, edit, delete",
-        required: true,
-      },
-    ],
-    generatePolicy: (values) => {
-      const actions = values.actions.split(",").map((a) => a.trim()).filter(Boolean);
-      if (actions.length === 1) {
-        return `// Owner Access Policy
-// Users can ${actions[0]} resources they own
-
-permit (
-  principal,
-  action == Action::"${actions[0]}",
-  resource
-) when {
-  resource.owner == principal
-};`;
-      }
-      return `// Owner Access Policy
-// Users can perform specified actions on resources they own
-
-${actions.map((action) => `permit (
-  principal,
-  action == Action::"${action}",
-  resource
-) when {
-  resource.owner == principal
-};`).join("\n\n")}`;
-    },
-  },
-  {
     id: "group-resource-access",
     name: "Group Resource Access",
-    description: "Allow group members to access specific resources assigned to the group",
+    description: "Grant group members specific actions on specific resources",
     icon: <TeamOutlined />,
     category: "rbac",
     variables: [
@@ -140,72 +210,342 @@ ${actions.map((action) => `permit (
         required: true,
       },
       {
-        key: "resourceType",
-        label: "Resource Type",
-        description: "The type of resource to grant access to",
+        key: "actions",
+        label: "Actions (comma-separated)",
+        description: "Actions group members can perform (e.g., view, edit, delete)",
         type: "text",
-        placeholder: "Document",
+        placeholder: "view, edit",
         required: true,
       },
       {
-        key: "action",
-        label: "Action",
-        description: "The action to allow",
+        key: "resourceType",
+        label: "Resource Type",
+        description: "The type of resource (leave empty for all types)",
         type: "text",
-        placeholder: "view",
-        required: true,
+        placeholder: "Document",
+        required: false,
+      },
+      {
+        key: "resourceId",
+        label: "Resource ID (optional)",
+        description: "Specific resource ID (leave empty for all resources of this type)",
+        type: "text",
+        placeholder: "doc-123",
+        required: false,
       },
     ],
-    generatePolicy: (values) => `// Group Resource Access Policy
-// Members of ${values.groupId} can ${values.action} ${values.resourceType} resources
+    generatePolicy: (values) => {
+      const actions = (values.actions || "").split(",").map((a) => a.trim()).filter(Boolean);
+      const hasResourceType = values.resourceType?.trim();
+      const hasResourceId = values.resourceId?.trim();
+      const groupId = values.groupId || "<group>";
+      
+      let resourceClause = "resource";
+      if (hasResourceId && hasResourceType) {
+        resourceClause = `resource == ${values.resourceType}::"${values.resourceId}"`;
+      } else if (hasResourceType) {
+        resourceClause = `resource is ${values.resourceType}`;
+      }
+      
+      if (actions.length === 0) {
+        return `// Group Resource Access Policy
+// Configure actions to generate the policy
 
 permit (
-  principal in Group::"${values.groupId}",
-  action == Action::"${values.action}",
-  resource is ${values.resourceType}
-);`,
+  principal in Group::"${groupId}",
+  action == Action::"<action>",
+  ${resourceClause}
+);`;
+      }
+      
+      if (actions.length === 1) {
+        return `// Group Resource Access Policy
+// Members of ${groupId} can ${actions[0]} ${hasResourceType || "all"} resources
+
+permit (
+  principal in Group::"${groupId}",
+  action == Action::"${actions[0]}",
+  ${resourceClause}
+);`;
+      }
+      
+      return `// Group Resource Access Policy
+// Members of ${groupId} can perform specified actions on ${hasResourceType || "all"} resources
+
+${actions.map((action) => `permit (
+  principal in Group::"${groupId}",
+  action == Action::"${action}",
+  ${resourceClause}
+);`).join("\n\n")}`;
+    },
   },
+  // ========== USER OR GROUP TEMPLATES ==========
+  {
+    id: "principal-resource-access",
+    name: "Principal Resource Access",
+    description: "Grant a user OR group specific actions on resources (flexible)",
+    icon: <CloudOutlined />,
+    category: "rbac",
+    variables: [
+      {
+        key: "principalId",
+        label: "User or Group",
+        description: "Select a user or group from Entra ID",
+        type: "entra-both",
+        placeholder: "Select user or group...",
+        required: true,
+      },
+      {
+        key: "principalType",
+        label: "Principal Type",
+        description: "Is this a User or Group?",
+        type: "select",
+        options: [
+          { value: "User", label: "User" },
+          { value: "Group", label: "Group" },
+        ],
+        required: true,
+      },
+      {
+        key: "actions",
+        label: "Actions (comma-separated)",
+        description: "Actions to allow (e.g., view, edit, delete, create)",
+        type: "text",
+        placeholder: "view, edit, delete",
+        required: true,
+      },
+      {
+        key: "resourceType",
+        label: "Resource Type",
+        description: "The type of resource (leave empty for all types)",
+        type: "text",
+        placeholder: "Document",
+        required: false,
+      },
+      {
+        key: "resourceId",
+        label: "Resource ID (optional)",
+        description: "Specific resource ID (leave empty for all resources)",
+        type: "text",
+        placeholder: "doc-123",
+        required: false,
+      },
+    ],
+    generatePolicy: (values) => {
+      const actions = (values.actions || "").split(",").map((a) => a.trim()).filter(Boolean);
+      const hasResourceType = values.resourceType?.trim();
+      const hasResourceId = values.resourceId?.trim();
+      const isGroup = values.principalType === "Group";
+      const principalId = values.principalId || "<principal>";
+      const principalType = values.principalType || "User";
+      
+      let resourceClause = "resource";
+      if (hasResourceId && hasResourceType) {
+        resourceClause = `resource == ${values.resourceType}::"${values.resourceId}"`;
+      } else if (hasResourceType) {
+        resourceClause = `resource is ${values.resourceType}`;
+      }
+      
+      const principalClause = isGroup 
+        ? `principal in Group::"${principalId}"`
+        : `principal == User::"${principalId}"`;
+      
+      if (actions.length === 0) {
+        return `// ${principalType} Resource Access Policy
+// Configure actions to generate the policy
+
+permit (
+  ${principalClause},
+  action == Action::"<action>",
+  ${resourceClause}
+);`;
+      }
+      
+      if (actions.length === 1) {
+        return `// ${principalType} Resource Access Policy
+// ${principalType} ${principalId} can ${actions[0]} ${hasResourceType || "all"} resources
+
+permit (
+  ${principalClause},
+  action == Action::"${actions[0]}",
+  ${resourceClause}
+);`;
+      }
+      
+      return `// ${principalType} Resource Access Policy
+// ${principalType} ${principalId} can perform specified actions
+
+${actions.map((action) => `permit (
+  ${principalClause},
+  action == Action::"${action}",
+  ${resourceClause}
+);`).join("\n\n")}`;
+    },
+  },
+  // ========== OWNERSHIP TEMPLATES ==========
+  {
+    id: "owner-access",
+    name: "Owner Access",
+    description: "Allow users to access resources they own (via owner attribute)",
+    icon: <UserOutlined />,
+    category: "ownership",
+    variables: [
+      {
+        key: "actions",
+        label: "Allowed Actions",
+        description: "Actions the owner can perform (comma-separated)",
+        type: "text",
+        placeholder: "view, edit, delete",
+        required: true,
+      },
+      {
+        key: "resourceType",
+        label: "Resource Type (optional)",
+        description: "Limit to a specific resource type",
+        type: "text",
+        placeholder: "Document",
+        required: false,
+      },
+    ],
+    generatePolicy: (values) => {
+      const actions = (values.actions || "").split(",").map((a) => a.trim()).filter(Boolean);
+      const hasResourceType = values.resourceType?.trim();
+      const resourceClause = hasResourceType ? `resource is ${values.resourceType}` : "resource";
+      
+      if (actions.length === 0) {
+        return `// Owner Access Policy
+// Configure actions to generate the policy
+
+permit (
+  principal,
+  action == Action::"<action>",
+  ${resourceClause}
+) when {
+  resource.owner == principal
+};`;
+      }
+      
+      if (actions.length === 1) {
+        return `// Owner Access Policy
+// Users can ${actions[0]} ${hasResourceType || ""} resources they own
+
+permit (
+  principal,
+  action == Action::"${actions[0]}",
+  ${resourceClause}
+) when {
+  resource.owner == principal
+};`;
+      }
+      return `// Owner Access Policy
+// Users can perform specified actions on ${hasResourceType || ""} resources they own
+
+${actions.map((action) => `permit (
+  principal,
+  action == Action::"${action}",
+  ${resourceClause}
+) when {
+  resource.owner == principal
+};`).join("\n\n")}`;
+    },
+  },
+  // ========== HIERARCHY TEMPLATES ==========
   {
     id: "folder-hierarchy",
-    name: "Folder Hierarchy Access",
-    description: "Grant access to all documents within a folder hierarchy",
+    name: "Folder/Container Hierarchy Access",
+    description: "Grant access to all resources within a container hierarchy",
     icon: <FileOutlined />,
     category: "hierarchy",
     variables: [
       {
-        key: "folderId",
-        label: "Folder ID",
-        description: "The ID of the parent folder",
+        key: "principalId",
+        label: "User or Group",
+        description: "Select a user or group from Entra ID",
+        type: "entra-both",
+        placeholder: "Select user or group...",
+        required: true,
+      },
+      {
+        key: "principalType",
+        label: "Principal Type",
+        description: "Is this a User or Group?",
+        type: "select",
+        options: [
+          { value: "User", label: "User" },
+          { value: "Group", label: "Group" },
+        ],
+        required: true,
+      },
+      {
+        key: "containerType",
+        label: "Container Type",
+        description: "The type of container (e.g., Folder, Project, Team)",
+        type: "text",
+        placeholder: "Folder",
+        required: true,
+      },
+      {
+        key: "containerId",
+        label: "Container ID",
+        description: "The ID of the parent container",
         type: "text",
         placeholder: "shared-docs",
         required: true,
       },
       {
-        key: "groupId",
-        label: "Group",
-        description: "Select a group from Entra ID or enter a group ID manually",
-        type: "entra-group",
-        placeholder: "team-alpha",
-        required: true,
-      },
-      {
-        key: "action",
-        label: "Action",
-        description: "The action to allow",
+        key: "actions",
+        label: "Actions (comma-separated)",
+        description: "Actions to allow",
         type: "text",
-        placeholder: "view",
+        placeholder: "view, edit",
         required: true,
       },
     ],
-    generatePolicy: (values) => `// Folder Hierarchy Access Policy
-// Members of ${values.groupId} can ${values.action} documents in folder ${values.folderId}
+    generatePolicy: (values) => {
+      const actions = (values.actions || "").split(",").map((a) => a.trim()).filter(Boolean);
+      const isGroup = values.principalType === "Group";
+      const principalId = values.principalId || "<principal>";
+      const principalType = values.principalType || "User";
+      const containerType = values.containerType || "Folder";
+      const containerId = values.containerId || "<container>";
+      
+      const principalClause = isGroup 
+        ? `principal in Group::"${principalId}"`
+        : `principal == User::"${principalId}"`;
+      
+      if (actions.length === 0) {
+        return `// Hierarchy Access Policy
+// Configure actions to generate the policy
 
 permit (
-  principal in Group::"${values.groupId}",
-  action == Action::"${values.action}",
-  resource in Folder::"${values.folderId}"
-);`,
+  ${principalClause},
+  action == Action::"<action>",
+  resource in ${containerType}::"${containerId}"
+);`;
+      }
+      
+      if (actions.length === 1) {
+        return `// Hierarchy Access Policy
+// ${principalType} ${principalId} can ${actions[0]} resources in ${containerType} ${containerId}
+
+permit (
+  ${principalClause},
+  action == Action::"${actions[0]}",
+  resource in ${containerType}::"${containerId}"
+);`;
+      }
+      
+      return `// Hierarchy Access Policy
+// ${principalType} ${principalId} can perform actions on resources in ${containerType} ${containerId}
+
+${actions.map((action) => `permit (
+  ${principalClause},
+  action == Action::"${action}",
+  resource in ${containerType}::"${containerId}"
+);`).join("\n\n")}`;
+    },
   },
+  // ========== ABAC TEMPLATES ==========
   {
     id: "public-read",
     name: "Public Read Access",
@@ -543,7 +883,8 @@ export default function PolicyTemplateWizard({
                     value={
                       variableValues[variable.key]
                         ? [{
-                            type: variable.type === "entra-user" ? "User" : "Group",
+                            type: (variableValues[`${variable.key}_type`] as "User" | "Group") || 
+                                  (variable.type === "entra-user" ? "User" : "Group"),
                             id: variableValues[variable.key],
                             displayName: variableValues[`${variable.key}_name`] || variableValues[variable.key],
                           }]
@@ -551,16 +892,27 @@ export default function PolicyTemplateWizard({
                     }
                     onChange={(selections) => {
                       if (selections.length > 0) {
-                        setVariableValues({
+                        const newValues: Record<string, string> = {
                           ...variableValues,
                           [variable.key]: selections[0].id,
                           [`${variable.key}_name`]: selections[0].displayName,
-                        });
+                        };
+                        // For entra-both, also store the type and auto-set principalType if it exists
+                        if (variable.type === "entra-both") {
+                          newValues[`${variable.key}_type`] = selections[0].type;
+                          // Auto-set the corresponding principalType field if this variable key ends with "Id"
+                          const typeKey = variable.key.replace(/Id$/, "Type");
+                          if (selectedTemplate?.variables.some(v => v.key === typeKey)) {
+                            newValues[typeKey] = selections[0].type;
+                          }
+                        }
+                        setVariableValues(newValues);
                       } else {
                         setVariableValues({
                           ...variableValues,
                           [variable.key]: "",
                           [`${variable.key}_name`]: "",
+                          [`${variable.key}_type`]: "",
                         });
                       }
                     }}
@@ -582,16 +934,20 @@ export default function PolicyTemplateWizard({
             </div>
           ))}
 
-          <Card size="small" title="Preview">
+          <Card size="small" title="Policy Preview">
             <pre
               style={{
                 margin: 0,
                 padding: 12,
-                background: "#f5f5f5",
+                background: "#1e1e1e",
+                color: "#d4d4d4",
                 borderRadius: 4,
                 maxHeight: 200,
                 overflow: "auto",
                 fontSize: 12,
+                fontFamily: "'Fira Code', 'Monaco', 'Consolas', monospace",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
               }}
             >
               {generatedPolicy || "// Fill in the required fields to see the policy"}
@@ -667,11 +1023,15 @@ export default function PolicyTemplateWizard({
               style={{
                 margin: 0,
                 padding: 12,
-                background: "#f5f5f5",
+                background: "#1e1e1e",
+                color: "#d4d4d4",
                 borderRadius: 4,
                 maxHeight: 300,
                 overflow: "auto",
                 fontSize: 12,
+                fontFamily: "'Fira Code', 'Monaco', 'Consolas', monospace",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
               }}
             >
               {generatedPolicy}

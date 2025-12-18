@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, Card, Checkbox, Col, Collapse, Input, Modal, Row, Select, Space, Table, Tabs, Tag, Typography, theme } from "antd";
-import { FileTextOutlined, PlusOutlined, ThunderboltOutlined, EyeOutlined } from "@ant-design/icons";
+import { FileTextOutlined, PlusOutlined, ThunderboltOutlined, EyeOutlined, AppstoreOutlined } from "@ant-design/icons";
 import { api, type Application, type AuthorizeResponse, type CedarEntity, type PolicyDetails, type PolicySummary } from "../api";
 import PolicyDragDropBuilder from "../components/PolicyDragDropBuilder";
+import PolicyTemplateWizard from "../components/PolicyTemplateWizard";
 
 const DEFAULT_POLICY = `permit (
   principal == User::"alice",
@@ -47,6 +48,7 @@ export default function Policies() {
   const [authzResult, setAuthzResult] = useState<AuthorizeResponse | null>(null);
 
   const [activeTab, setActiveTab] = useState("view");
+  const [templateWizardOpen, setTemplateWizardOpen] = useState(false);
 
   const selectedApp = useMemo(() => apps.find((a) => a.id === selectedAppId), [apps, selectedAppId]);
 
@@ -170,6 +172,29 @@ export default function Policies() {
     } finally {
       setSavingPolicy(false);
     }
+  }
+
+  async function onTemplateSubmit(policyName: string, policyDescription: string, policyTextContent: string, activatePolicy: boolean) {
+    if (selectedAppId === "") {
+      throw new Error("Select an application first.");
+    }
+    const res = await api.createPolicy(selectedAppId, {
+      name: policyName,
+      description: policyDescription,
+      policy_text: policyTextContent,
+      activate: activatePolicy,
+    });
+    if (res.status === "pending_approval") {
+      setNotice("Policy saved but requires approval before activation.");
+    } else if (res.status === "draft") {
+      setNotice("Policy saved as draft.");
+    } else {
+      setNotice("Policy saved successfully!");
+    }
+    const items = await api.listPolicies(selectedAppId);
+    setPolicies(items);
+    setActiveTab("view");
+    setTemplateWizardOpen(false);
   }
 
   async function openPolicyModal(policyId: number) {
@@ -423,7 +448,19 @@ export default function Policies() {
           </Col>
           
           <Col xs={24} lg={10}>
-            <Card title="Save Policy" style={{ position: "sticky", top: 24 }}>
+            <Card 
+              title="Save Policy" 
+              style={{ position: "sticky", top: 24 }}
+              extra={
+                <Button 
+                  icon={<AppstoreOutlined />}
+                  onClick={() => setTemplateWizardOpen(true)}
+                  disabled={selectedAppId === ""}
+                >
+                  Use Template
+                </Button>
+              }
+            >
               <Space direction="vertical" size={16} style={{ width: "100%" }}>
                 <div>
                   <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>
@@ -736,6 +773,17 @@ export default function Policies() {
           </Space>
         )}
       </Modal>
+
+      {/* Policy Template Wizard */}
+      <PolicyTemplateWizard
+        open={templateWizardOpen}
+        onClose={() => setTemplateWizardOpen(false)}
+        onSubmit={onTemplateSubmit}
+        saving={savingPolicy}
+        approvalRequired={selectedApp?.approval_required}
+        entityTypes={entityTypes}
+        actions={[]}
+      />
     </Space>
   );
 }
