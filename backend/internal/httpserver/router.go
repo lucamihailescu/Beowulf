@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"time"
 
 	cedar "github.com/cedar-policy/cedar-go"
@@ -19,6 +21,7 @@ import (
 	"cedar/internal/authz"
 	"cedar/internal/config"
 	"cedar/internal/entra"
+	"cedar/internal/simulation"
 	"cedar/internal/storage"
 )
 
@@ -27,8 +30,33 @@ type CacheInvalidator interface {
 }
 
 type healthResponse struct {
-	Status       string `json:"status"`
-	CedarVersion string `json:"cedar_version,omitempty"`
+	Status       string                 `json:"status"`
+	CedarVersion string                 `json:"cedar_version,omitempty"`
+	Checks       map[string]healthCheck `json:"checks,omitempty"`
+}
+
+type healthCheck struct {
+	Status  string `json:"status"`
+	Latency string `json:"latency,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+type clusterStatusResponse struct {
+	InstanceID   string                 `json:"instance_id"`
+	Status       string                 `json:"status"`
+	Uptime       string                 `json:"uptime"`
+	CedarVersion string                 `json:"cedar_version"`
+	Checks       map[string]healthCheck `json:"checks"`
+	Cache        *cacheStats            `json:"cache,omitempty"`
+	SSEClients   int                    `json:"sse_clients"`
+	StartedAt    string                 `json:"started_at"`
+}
+
+type cacheStats struct {
+	Enabled   bool   `json:"enabled"`
+	L1Size    int    `json:"l1_size,omitempty"`
+	L2Enabled bool   `json:"l2_enabled"`
+	HitRate   string `json:"hit_rate,omitempty"`
 }
 
 type authorizeRequest struct {
@@ -141,18 +169,30 @@ type SchemaProvider interface {
 
 // API provides the HTTP handlers for the application.
 type API struct {
-	cfg         config.Config
-	authzSvc    *authz.Service
-	apps        *storage.ApplicationRepo
-	policies    *storage.PolicyRepo
-	entities    *storage.EntityRepo
-	schemas     *storage.SchemaRepo
-	audits      *storage.AuditRepo
-	namespaces  *storage.NamespaceRepo
-	settings    *storage.SettingsRepo
-	cache       CacheInvalidator
-	sseBroker   *SSEBroker
-	entraClient *entra.Client
+	cfg                 config.Config
+	authzSvc            *authz.Service
+	apps                *storage.ApplicationRepo
+	policies            *storage.PolicyRepo
+	entities            *storage.EntityRepo
+	schemas             *storage.SchemaRepo
+	audits              *storage.AuditRepo
+	namespaces          *storage.NamespaceRepo
+	settings            *storage.SettingsRepo
+	backendAuthRepo     *storage.BackendAuthRepo
+	backendInstanceRepo *storage.BackendInstanceRepo
+	cache               CacheInvalidator
+	cacheStore          *storage.Cache // For health checks
+	sseBroker           *SSEBroker
+	entraClient         *entra.Client
+	db                  DBPinger // For health checks
+	instanceRegistry    *storage.InstanceRegistry
+	instanceID          string
+	startedAt           time.Time
+}
+
+// DBPinger interface for database health checks
+type DBPinger interface {
+	PingContext(ctx context.Context) error
 }
 
 // NewRouter configures the HTTP router with basic endpoints.
@@ -173,7 +213,7 @@ type API struct {
 // @securityDefinitions.apikey BearerAuth
 // @in header
 // @name Authorization
-func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.ApplicationRepo, policies *storage.PolicyRepo, entities *storage.EntityRepo, schemas *storage.SchemaRepo, audits *storage.AuditRepo, namespaces *storage.NamespaceRepo, settings *storage.SettingsRepo, cache CacheInvalidator) http.Handler {
+func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.ApplicationRepo, policies *storage.PolicyRepo, entities *storage.EntityRepo, schemas *storage.SchemaRepo, audits *storage.AuditRepo, namespaces *storage.NamespaceRepo, settings *storage.SettingsRepo, backendAuthRepo *storage.BackendAuthRepo, backendInstanceRepo *storage.BackendInstanceRepo, cache CacheInvalidator, cacheStore *storage.Cache, db DBPinger, instanceRegistry *storage.InstanceRegistry, simulationSvc *simulation.Service) http.Handler {
 	// Create SSE broker for real-time event streaming
 	sseBroker := NewSSEBroker()
 
@@ -191,19 +231,42 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 		entraClient = entra.NewClient(cfg.AzureTenantID, cfg.AzureClientID, cfg.AzureClientSecret)
 	}
 
+	// Get instance ID from registry if available, otherwise generate one
+	var instanceID string
+	if instanceRegistry != nil {
+		instanceID = instanceRegistry.GetInstanceID()
+	} else {
+		// Generate instance ID from hostname + random suffix
+		hostname, _ := os.Hostname()
+		instanceID = fmt.Sprintf("%s-%d", hostname, time.Now().UnixNano()%10000)
+	}
+	startedAt := time.Now()
+
 	api := &API{
-		cfg:         cfg,
-		authzSvc:    authzSvc,
-		apps:        apps,
-		policies:    policies,
-		entities:    entities,
-		schemas:     schemas,
-		audits:      audits,
-		namespaces:  namespaces,
-		settings:    settings,
-		cache:       cache,
-		sseBroker:   sseBroker,
-		entraClient: entraClient,
+		cfg:                 cfg,
+		authzSvc:            authzSvc,
+		apps:                apps,
+		policies:            policies,
+		entities:            entities,
+		schemas:             schemas,
+		audits:              audits,
+		namespaces:          namespaces,
+		settings:            settings,
+		backendAuthRepo:     backendAuthRepo,
+		backendInstanceRepo: backendInstanceRepo,
+		cache:               cache,
+		cacheStore:          cacheStore,
+		sseBroker:           sseBroker,
+		entraClient:         entraClient,
+		db:                  db,
+		instanceRegistry:    instanceRegistry,
+		instanceID:          instanceID,
+		startedAt:           startedAt,
+	}
+
+	// Set up status function for instance registry if available
+	if instanceRegistry != nil {
+		instanceRegistry.SetStatusFunc(api.getInstanceStatus)
 	}
 
 	r := chi.NewRouter()
@@ -226,6 +289,9 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 	}
 
 	r.Get("/health", api.handleHealth)
+	r.Get("/v1/cluster/status", api.handleClusterStatus)
+	r.Get("/v1/cluster/instances", api.handleListInstances)
+	r.Get("/v1/cluster/live-backends", api.handleListLiveBackends)
 	r.Get("/v1/me", api.handleGetMe)
 	r.Post("/v1/authorize", api.handleAuthorize)
 
@@ -280,7 +346,30 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 		r.Post("/entra", api.handleSaveEntraSettings)
 		r.Post("/entra/test", api.handleTestEntraConnection)
 		r.Delete("/entra", api.handleDeleteEntraSettings)
+
+		// Backend authentication settings
+		r.Get("/backend-auth", api.handleGetBackendAuthConfig)
+		r.Put("/backend-auth", api.handleUpdateBackendAuthConfig)
+		r.Post("/backend-auth/ca", api.handleUploadCACertificate)
+		r.Delete("/backend-auth/ca", api.handleRemoveCACertificate)
 	})
+
+	// Backend authentication verification (for backends to verify their credentials)
+	r.Post("/v1/cluster/verify", api.handleVerifyBackendAuth)
+
+	// Backend instance management
+	r.Route("/v1/cluster/backends", func(r chi.Router) {
+		r.Post("/register", api.handleRegisterBackendInstance)
+		r.Get("/", api.handleListBackendInstances)
+		r.Get("/pending", api.handleListPendingBackendInstances)
+		r.Get("/{instanceId}", api.handleGetBackendInstanceStatus)
+		r.Post("/{instanceId}/approve", api.handleApproveBackendInstance)
+		r.Post("/{instanceId}/reject", api.handleRejectBackendInstance)
+		r.Delete("/{instanceId}", api.handleDeleteBackendInstance)
+	})
+
+	// Update approval_required setting
+	r.Put("/v1/settings/backend-auth/approval", api.handleUpdateApprovalRequired)
 
 	// Public auth config endpoint (no auth required for this one)
 	r.Get("/v1/auth/config", api.handleGetAuthConfig)
@@ -288,6 +377,12 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 	r.Route("/v1/audit", func(r chi.Router) {
 		r.Get("/", api.handleListAuditLogs)
 	})
+
+	// Simulation routes
+	if simulationSvc != nil {
+		simAPI := NewSimulationAPI(simulationSvc)
+		RegisterSimulationRoutes(r, simAPI)
+	}
 
 	// Swagger UI
 	r.Get("/swagger/*", httpSwagger.Handler(
@@ -303,7 +398,80 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 // @Produce json
 // @Success 200 {object} healthResponse
 // @Router /health [get]
-func (a *API) handleHealth(w http.ResponseWriter, _ *http.Request) {
+func (a *API) handleHealth(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+	version := "unknown"
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, dep := range info.Deps {
+			if dep.Path == "github.com/cedar-policy/cedar-go" {
+				version = dep.Version
+				break
+			}
+		}
+	}
+
+	// Perform health checks
+	checks := make(map[string]healthCheck)
+	overallStatus := "healthy"
+
+	// Check database
+	if a.db != nil {
+		start := time.Now()
+		if err := a.db.PingContext(r.Context()); err != nil {
+			overallStatus = "degraded"
+			checks["database"] = healthCheck{
+				Status: "error",
+				Error:  err.Error(),
+			}
+		} else {
+			checks["database"] = healthCheck{
+				Status:  "healthy",
+				Latency: time.Since(start).String(),
+			}
+		}
+	}
+
+	// Check Redis via cache store
+	if a.cacheStore != nil {
+		start := time.Now()
+		if err := a.cacheStore.Ping(r.Context()); err != nil {
+			// Redis down is degraded, not critical
+			if overallStatus == "healthy" {
+				overallStatus = "degraded"
+			}
+			checks["redis"] = healthCheck{
+				Status: "error",
+				Error:  err.Error(),
+			}
+		} else {
+			checks["redis"] = healthCheck{
+				Status:  "healthy",
+				Latency: time.Since(start).String(),
+			}
+		}
+	}
+
+	resp := healthResponse{
+		Status:       overallStatus,
+		CedarVersion: version,
+		Checks:       checks,
+	}
+
+	if overallStatus != "healthy" {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// @Summary Get Cluster Status
+// @Description Returns detailed status of this backend instance including health checks and cache stats
+// @Tags System
+// @Produce json
+// @Success 200 {object} clusterStatusResponse
+// @Router /v1/cluster/status [get]
+func (a *API) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	version := "unknown"
@@ -316,10 +484,300 @@ func (a *API) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 
-	_ = json.NewEncoder(w).Encode(healthResponse{
-		Status:       "ok",
+	// Perform health checks
+	checks := make(map[string]healthCheck)
+	overallStatus := "healthy"
+
+	// Check database
+	if a.db != nil {
+		start := time.Now()
+		if err := a.db.PingContext(r.Context()); err != nil {
+			overallStatus = "degraded"
+			checks["database"] = healthCheck{
+				Status: "error",
+				Error:  err.Error(),
+			}
+		} else {
+			checks["database"] = healthCheck{
+				Status:  "healthy",
+				Latency: time.Since(start).String(),
+			}
+		}
+	}
+
+	// Check Redis via cache store
+	if a.cacheStore != nil {
+		start := time.Now()
+		if err := a.cacheStore.Ping(r.Context()); err != nil {
+			if overallStatus == "healthy" {
+				overallStatus = "degraded"
+			}
+			checks["redis"] = healthCheck{
+				Status: "error",
+				Error:  err.Error(),
+			}
+		} else {
+			checks["redis"] = healthCheck{
+				Status:  "healthy",
+				Latency: time.Since(start).String(),
+			}
+		}
+	}
+
+	// Get cache stats
+	var cacheStatsResp *cacheStats
+	if a.cacheStore != nil {
+		stats := a.cacheStore.Stats()
+		cacheStatsResp = &cacheStats{
+			Enabled:   true,
+			L1Size:    stats.L1Size,
+			L2Enabled: stats.L2Enabled,
+			HitRate:   fmt.Sprintf("%.1f%%", stats.HitRate*100),
+		}
+	}
+
+	// Get SSE client count
+	sseClients := 0
+	if a.sseBroker != nil {
+		sseClients = a.sseBroker.ClientCount()
+	}
+
+	// Calculate uptime
+	uptime := time.Since(a.startedAt)
+	uptimeStr := formatDuration(uptime)
+
+	resp := clusterStatusResponse{
+		InstanceID:   a.instanceID,
+		Status:       overallStatus,
+		Uptime:       uptimeStr,
 		CedarVersion: version,
-	})
+		Checks:       checks,
+		Cache:        cacheStatsResp,
+		SSEClients:   sseClients,
+		StartedAt:    a.startedAt.UTC().Format(time.RFC3339),
+	}
+
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// formatDuration formats a duration into a human-readable string
+func formatDuration(d time.Duration) string {
+	d = d.Round(time.Second)
+	h := d / time.Hour
+	d -= h * time.Hour
+	m := d / time.Minute
+	d -= m * time.Minute
+	s := d / time.Second
+
+	if h > 0 {
+		return fmt.Sprintf("%dh %dm %ds", h, m, s)
+	}
+	if m > 0 {
+		return fmt.Sprintf("%dm %ds", m, s)
+	}
+	return fmt.Sprintf("%ds", s)
+}
+
+// getInstanceStatus returns the current instance status for the instance registry
+func (a *API) getInstanceStatus() storage.InstanceInfo {
+	version := "unknown"
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, dep := range info.Deps {
+			if dep.Path == "github.com/cedar-policy/cedar-go" {
+				version = dep.Version
+				break
+			}
+		}
+	}
+
+	// Perform health checks
+	checks := make(map[string]storage.HealthStatus)
+	overallStatus := "healthy"
+	ctx := context.Background()
+
+	// Check database
+	if a.db != nil {
+		start := time.Now()
+		if err := a.db.PingContext(ctx); err != nil {
+			overallStatus = "degraded"
+			checks["database"] = storage.HealthStatus{
+				Status: "error",
+				Error:  err.Error(),
+			}
+		} else {
+			checks["database"] = storage.HealthStatus{
+				Status:  "healthy",
+				Latency: time.Since(start).String(),
+			}
+		}
+	}
+
+	// Check Redis via cache store
+	if a.cacheStore != nil {
+		start := time.Now()
+		if err := a.cacheStore.Ping(ctx); err != nil {
+			if overallStatus == "healthy" {
+				overallStatus = "degraded"
+			}
+			checks["redis"] = storage.HealthStatus{
+				Status: "error",
+				Error:  err.Error(),
+			}
+		} else {
+			checks["redis"] = storage.HealthStatus{
+				Status:  "healthy",
+				Latency: time.Since(start).String(),
+			}
+		}
+	}
+
+	// Get cache stats
+	var cacheStatus *storage.CacheStatus
+	if a.cacheStore != nil {
+		stats := a.cacheStore.Stats()
+		cacheStatus = &storage.CacheStatus{
+			Enabled:   true,
+			L1Size:    stats.L1Size,
+			L2Enabled: stats.L2Enabled,
+			HitRate:   fmt.Sprintf("%.1f%%", stats.HitRate*100),
+		}
+	}
+
+	// Get SSE client count
+	sseClients := 0
+	if a.sseBroker != nil {
+		sseClients = a.sseBroker.ClientCount()
+	}
+
+	return storage.InstanceInfo{
+		InstanceID:   a.instanceID,
+		Status:       overallStatus,
+		Uptime:       formatDuration(time.Since(a.startedAt)),
+		CedarVersion: version,
+		StartedAt:    a.startedAt,
+		Checks:       checks,
+		Cache:        cacheStatus,
+		SSEClients:   sseClients,
+	}
+}
+
+// @Summary List All Instances
+// @Description Returns status of all registered backend instances in the cluster
+// @Tags System
+// @Produce json
+// @Success 200 {object} listInstancesResponse
+// @Router /v1/cluster/instances [get]
+func (a *API) handleListInstances(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	var instances []storage.InstanceInfo
+
+	if a.instanceRegistry != nil {
+		var err error
+		instances, err = a.instanceRegistry.ListInstances(r.Context())
+		if err != nil {
+			// Fallback to just this instance
+			instances = []storage.InstanceInfo{a.getInstanceStatus()}
+		}
+
+		// Filter to only show approved instances (if backend approval is enabled)
+		if a.backendInstanceRepo != nil {
+			approvedStatus := storage.BackendStatusApproved
+			approvedList, err := a.backendInstanceRepo.List(r.Context(), &approvedStatus)
+			if err == nil {
+				// Build a map of approved instance IDs
+				approvedInstanceIDs := make(map[string]bool)
+				for _, inst := range approvedList {
+					approvedInstanceIDs[inst.InstanceID] = true
+				}
+
+				// Filter instances to only approved ones
+				filteredInstances := make([]storage.InstanceInfo, 0)
+				for _, inst := range instances {
+					if approvedInstanceIDs[inst.InstanceID] {
+						filteredInstances = append(filteredInstances, inst)
+					}
+				}
+				instances = filteredInstances
+			}
+		}
+	} else {
+		// No registry, return just this instance
+		instances = []storage.InstanceInfo{a.getInstanceStatus()}
+	}
+
+	resp := listInstancesResponse{
+		Instances: instances,
+		Total:     len(instances),
+	}
+
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// listInstancesResponse is the response for the list instances endpoint
+type listInstancesResponse struct {
+	Instances []storage.InstanceInfo `json:"instances"`
+	Total     int                    `json:"total"`
+}
+
+// handleListLiveBackends returns a plain-text list of approved, healthy backend servers
+// for Nginx dynamic upstream configuration. Only returns backends that are:
+// 1. Approved in the database
+// 2. Have sent a heartbeat within the last 35 seconds
+// @Summary List Live Backends for Load Balancer
+// @Description Returns plain text list of live backend servers for Nginx upstream configuration
+// @Tags System
+// @Produce text/plain
+// @Success 200 {string} string "List of server directives"
+// @Router /v1/cluster/live-backends [get]
+func (a *API) handleListLiveBackends(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+
+	if a.backendInstanceRepo == nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("# Backend instance repository not configured\n"))
+		return
+	}
+
+	// Get all approved backends from the database
+	approvedStatus := storage.BackendStatusApproved
+	approvedList, err := a.backendInstanceRepo.List(r.Context(), &approvedStatus)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(fmt.Sprintf("# Error fetching backends: %v\n", err)))
+		return
+	}
+
+	var response strings.Builder
+	response.WriteString("# Auto-generated by Cedar - do not edit manually\n")
+	response.WriteString(fmt.Sprintf("# Generated at: %s\n", time.Now().Format(time.RFC3339)))
+
+	liveCount := 0
+	for _, inst := range approvedList {
+		// Check if the instance is stale (heartbeat older than 35s)
+		isStale := true
+		if inst.LastHeartbeat != nil {
+			isStale = time.Since(*inst.LastHeartbeat) > 35*time.Second
+		}
+		if !isStale {
+			// Use the hostname (container ID) which Docker DNS can resolve
+			response.WriteString(fmt.Sprintf("server %s:8080;\n", inst.Hostname))
+			liveCount++
+		}
+	}
+
+	// If no live backends, add a comment but don't fail
+	if liveCount == 0 {
+		response.WriteString("# No live backends available\n")
+		// Add a placeholder that will cause Nginx to fail gracefully
+		// This prevents Nginx from crashing when the upstream is empty
+		response.WriteString("server 127.0.0.1:1 down;\n")
+	}
+
+	response.WriteString(fmt.Sprintf("# Total live backends: %d\n", liveCount))
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(response.String()))
 }
 
 // @Summary Get Current User
@@ -332,14 +790,14 @@ func (a *API) handleHealth(w http.ResponseWriter, _ *http.Request) {
 // @Failure 401 {object} map[string]string
 // @Router /v1/me [get]
 func (a *API) handleGetMe(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	user := GetUserFromContext(r.Context())
-	if user == nil {
-		w.WriteHeader(http.StatusUnauthorized)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "not authenticated"})
-		return
-	}
-	_ = json.NewEncoder(w).Encode(user)
+		w.Header().Set("Content-Type", "application/json")
+		user := GetUserFromContext(r.Context())
+		if user == nil {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "not authenticated"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(user)
 }
 
 // @Summary Evaluate Authorization
@@ -354,47 +812,47 @@ func (a *API) handleGetMe(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {object} map[string]string
 // @Router /v1/authorize [post]
 func (a *API) handleAuthorize(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json")
 
-	var req authorizeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid request payload"})
-		return
-	}
+		var req authorizeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "invalid request payload"})
+			return
+		}
 
-	if req.ApplicationID == 0 || req.Principal.Type == "" || req.Action.Type == "" || req.Resource.Type == "" || req.Principal.ID == "" || req.Action.ID == "" || req.Resource.ID == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "application_id, principal, action, and resource are required"})
-		return
-	}
+		if req.ApplicationID == 0 || req.Principal.Type == "" || req.Action.Type == "" || req.Resource.Type == "" || req.Principal.ID == "" || req.Action.ID == "" || req.Resource.ID == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "application_id, principal, action, and resource are required"})
+			return
+		}
 
 	// Prepare context with cache source tracker
 	var cacheSource string = "DB" // Default if not updated
 	ctx := context.WithValue(r.Context(), storage.CtxKeyCacheSource, &cacheSource)
 
 	result, err := a.authzSvc.Evaluate(ctx, authz.EvaluateInput{
-		ApplicationID: req.ApplicationID,
-		Principal:     authz.Reference{Type: req.Principal.Type, ID: req.Principal.ID},
-		Action:        authz.Reference{Type: req.Action.Type, ID: req.Action.ID},
-		Resource:      authz.Reference{Type: req.Resource.Type, ID: req.Resource.ID},
-		Context:       req.Context,
-	})
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
+			ApplicationID: req.ApplicationID,
+			Principal:     authz.Reference{Type: req.Principal.Type, ID: req.Principal.ID},
+			Action:        authz.Reference{Type: req.Action.Type, ID: req.Action.ID},
+			Resource:      authz.Reference{Type: req.Resource.Type, ID: req.Resource.ID},
+			Context:       req.Context,
+		})
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
 
 	// Set response header to indicate cache source (L1, L2, or DB)
 	w.Header().Set("X-Cedar-Cache", cacheSource)
 
-	// Log authorization decision to audit trail
+		// Log authorization decision to audit trail
 	if a.audits != nil {
-		appID := req.ApplicationID
-		principal := req.Principal.Type + "::" + req.Principal.ID
-		action := req.Action.Type + "::" + req.Action.ID
-		resource := req.Resource.Type + "::" + req.Resource.ID
+			appID := req.ApplicationID
+			principal := req.Principal.Type + "::" + req.Principal.ID
+			action := req.Action.Type + "::" + req.Action.ID
+			resource := req.Resource.Type + "::" + req.Resource.ID
 
 		// Get the authenticated caller (service/user making the request)
 		caller := "unknown"
@@ -402,27 +860,27 @@ func (a *API) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 			caller = user.ID
 		}
 
-		auditCtx := map[string]any{
+			auditCtx := map[string]any{
 			"caller":    caller,    // Authenticated service/user making the request
 			"principal": principal, // Subject of the authorization check
-			"action":    action,
-			"resource":  resource,
-			"reasons":   result.Reasons,
-			"errors":    result.Errors,
-		}
-		if req.Context != nil {
-			auditCtx["request_context"] = req.Context
-		}
+				"action":    action,
+				"resource":  resource,
+				"reasons":   result.Reasons,
+				"errors":    result.Errors,
+			}
+			if req.Context != nil {
+				auditCtx["request_context"] = req.Context
+			}
 		// Actor is the authenticated caller, not the principal being checked
 		_ = a.audits.Log(r.Context(), &appID, caller, "authorize", resource, result.Decision, auditCtx)
-	}
+		}
 
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(authorizeResponse{
-		Decision: result.Decision,
-		Reasons:  result.Reasons,
-		Errors:   result.Errors,
-	})
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(authorizeResponse{
+			Decision: result.Decision,
+			Reasons:  result.Reasons,
+			Errors:   result.Errors,
+		})
 }
 
 // @Summary List Applications
@@ -436,12 +894,12 @@ func (a *API) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 // @Router /v1/apps [get]
 func (a *API) handleListApps(w http.ResponseWriter, r *http.Request) {
 	appsList, err := a.apps.List(r.Context())
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
-	json.NewEncoder(w).Encode(appsList)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			json.NewEncoder(w).Encode(appsList)
 }
 
 // @Summary Create Application
@@ -456,17 +914,17 @@ func (a *API) handleListApps(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {object} map[string]string
 // @Router /v1/apps [post]
 func (a *API) handleCreateApp(w http.ResponseWriter, r *http.Request) {
-	var req createAppRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid request payload"})
-		return
-	}
-	if req.Name == "" || req.NamespaceID == 0 {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "name and namespace_id are required"})
-		return
-	}
+			var req createAppRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid request payload"})
+				return
+			}
+			if req.Name == "" || req.NamespaceID == 0 {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "name and namespace_id are required"})
+				return
+			}
 
 	approvalRequired := true
 	if req.ApprovalRequired != nil {
@@ -474,24 +932,24 @@ func (a *API) handleCreateApp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id, err := a.apps.Create(r.Context(), req.Name, req.NamespaceID, req.Description, approvalRequired)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
 
-	// Log application creation to audit trail
+			// Log application creation to audit trail
 	if a.audits != nil {
-		auditCtx := map[string]any{
+				auditCtx := map[string]any{
 			"name":              req.Name,
 			"namespace_id":      req.NamespaceID,
 			"description":       req.Description,
 			"approval_required": approvalRequired,
-		}
+				}
 		_ = a.audits.Log(r.Context(), &id, "api", "application.create", req.Name, "", auditCtx)
-	}
+			}
 
-	json.NewEncoder(w).Encode(map[string]any{"id": id})
+			json.NewEncoder(w).Encode(map[string]any{"id": id})
 }
 
 // @Summary List Namespaces
@@ -505,15 +963,15 @@ func (a *API) handleCreateApp(w http.ResponseWriter, r *http.Request) {
 // @Router /v1/namespaces [get]
 func (a *API) handleListNamespaces(w http.ResponseWriter, r *http.Request) {
 	list, err := a.namespaces.List(r.Context())
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
-	if list == nil {
-		list = []storage.Namespace{}
-	}
-	json.NewEncoder(w).Encode(list)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			if list == nil {
+				list = []storage.Namespace{}
+			}
+			json.NewEncoder(w).Encode(list)
 }
 
 // @Summary Create Namespace
@@ -528,35 +986,35 @@ func (a *API) handleListNamespaces(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {object} map[string]string
 // @Router /v1/namespaces [post]
 func (a *API) handleCreateNamespace(w http.ResponseWriter, r *http.Request) {
-	var req createNamespaceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid request payload"})
-		return
-	}
-	if req.Name == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "name is required"})
-		return
-	}
+			var req createNamespaceRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid request payload"})
+				return
+			}
+			if req.Name == "" {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "name is required"})
+				return
+			}
 
 	id, err := a.namespaces.Create(r.Context(), req.Name, req.Description)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
 
-	// Log namespace creation to audit trail
+			// Log namespace creation to audit trail
 	if a.audits != nil {
-		auditCtx := map[string]any{
-			"name":        req.Name,
-			"description": req.Description,
-		}
+				auditCtx := map[string]any{
+					"name":        req.Name,
+					"description": req.Description,
+				}
 		_ = a.audits.Log(r.Context(), nil, "api", "namespace.create", req.Name, "", auditCtx)
-	}
+			}
 
-	json.NewEncoder(w).Encode(map[string]any{"id": id})
+			json.NewEncoder(w).Encode(map[string]any{"id": id})
 }
 
 // @Summary Create/Update Policy
@@ -572,52 +1030,52 @@ func (a *API) handleCreateNamespace(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {object} map[string]string
 // @Router /v1/apps/{id}/policies [post]
 func (a *API) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
-	appID, err := parseIDParam(r, "id")
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid app id"})
-		return
-	}
-
-	var req createPolicyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid request payload"})
-		return
-	}
-	if req.Name == "" || req.PolicyText == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "name and policy_text are required"})
-		return
-	}
-
-	// Validate Cedar syntax early.
-	var tmpPolicy cedar.Policy
-	if err := tmpPolicy.UnmarshalCedar([]byte(req.PolicyText)); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid cedar policy syntax: " + err.Error()})
-		return
-	}
-
-	// Check if schema exists for information purposes
-	var hasActiveSchema bool
-	if a.schemas != nil {
-		activeSchema, err := a.schemas.GetActiveSchema(r.Context(), appID)
+		appID, err := parseIDParam(r, "id")
 		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]string{"error": "failed to check schema: " + err.Error()})
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "invalid app id"})
 			return
 		}
-		hasActiveSchema = activeSchema != nil
-	}
+
+		var req createPolicyRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "invalid request payload"})
+			return
+		}
+		if req.Name == "" || req.PolicyText == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "name and policy_text are required"})
+			return
+		}
+
+		// Validate Cedar syntax early.
+		var tmpPolicy cedar.Policy
+		if err := tmpPolicy.UnmarshalCedar([]byte(req.PolicyText)); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "invalid cedar policy syntax: " + err.Error()})
+			return
+		}
+
+		// Check if schema exists for information purposes
+		var hasActiveSchema bool
+	if a.schemas != nil {
+		activeSchema, err := a.schemas.GetActiveSchema(r.Context(), appID)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": "failed to check schema: " + err.Error()})
+				return
+			}
+			hasActiveSchema = activeSchema != nil
+		}
 	_ = hasActiveSchema
 
 	policyID, version, status, err := a.policies.UpsertPolicyWithVersion(r.Context(), appID, req.Name, req.Description, req.PolicyText, req.Activate)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
 	if a.cache != nil {
 		_ = a.cache.InvalidateApp(r.Context(), appID)
 	}
@@ -625,19 +1083,19 @@ func (a *API) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 	// Publish SSE event for real-time updates
 	if a.sseBroker != nil {
 		a.sseBroker.PublishPolicyUpdate(appID, "created")
-	}
-
-	// Log policy creation/update to audit trail
-	if a.audits != nil {
-		auditAction := "policy.create"
-		auditCtx := map[string]any{
-			"policy_name": req.Name,
-			"version":     version,
-			"activated":   req.Activate,
-			"status":      status,
 		}
+
+		// Log policy creation/update to audit trail
+	if a.audits != nil {
+			auditAction := "policy.create"
+			auditCtx := map[string]any{
+				"policy_name": req.Name,
+				"version":     version,
+				"activated":   req.Activate,
+			"status":      status,
+			}
 		_ = a.audits.Log(r.Context(), &appID, "api", auditAction, req.Name, "", auditCtx)
-	}
+		}
 
 	json.NewEncoder(w).Encode(map[string]any{"policy_id": policyID, "version": version, "status": status})
 }
@@ -653,20 +1111,20 @@ func (a *API) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} map[string]string
 // @Router /v1/apps/{id}/policies [get]
 func (a *API) handleListPolicies(w http.ResponseWriter, r *http.Request) {
-	appID, err := parseIDParam(r, "id")
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid app id"})
-		return
-	}
+		appID, err := parseIDParam(r, "id")
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "invalid app id"})
+			return
+		}
 
 	items, err := a.policies.ListPolicies(r.Context(), appID)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
-	json.NewEncoder(w).Encode(items)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(items)
 }
 
 // @Summary Get Policy Details
@@ -681,26 +1139,26 @@ func (a *API) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {object} map[string]string
 // @Router /v1/apps/{id}/policies/{policyId} [get]
 func (a *API) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
-	appID, err := parseIDParam(r, "id")
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid app id"})
-		return
-	}
-	policyID, err := parseIDParam(r, "policyId")
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid policy id"})
-		return
-	}
+		appID, err := parseIDParam(r, "id")
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "invalid app id"})
+			return
+		}
+		policyID, err := parseIDParam(r, "policyId")
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "invalid policy id"})
+			return
+		}
 
 	item, err := a.policies.GetPolicy(r.Context(), appID, policyID)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
-	json.NewEncoder(w).Encode(item)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(item)
 }
 
 // @Summary Approve Policy Version
@@ -923,30 +1381,30 @@ func (a *API) handleApproveDeletePolicy(w http.ResponseWriter, r *http.Request) 
 // @Failure 400 {object} map[string]string
 // @Router /v1/apps/{id}/entities [post]
 func (a *API) handleUpsertEntity(w http.ResponseWriter, r *http.Request) {
-	appID, err := parseIDParam(r, "id")
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid app id"})
-		return
-	}
+		appID, err := parseIDParam(r, "id")
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "invalid app id"})
+			return
+		}
 
-	var req upsertEntityRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid request payload"})
-		return
-	}
-	if req.Type == "" || req.ID == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "type and id are required"})
-		return
-	}
+		var req upsertEntityRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "invalid request payload"})
+			return
+		}
+		if req.Type == "" || req.ID == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "type and id are required"})
+			return
+		}
 
 	if err := a.entities.UpsertEntity(r.Context(), appID, req.Type, req.ID, req.Attributes, req.Parents); err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
 	if a.cache != nil {
 		_ = a.cache.InvalidateApp(r.Context(), appID)
 	}
@@ -954,22 +1412,22 @@ func (a *API) handleUpsertEntity(w http.ResponseWriter, r *http.Request) {
 	// Publish SSE event for real-time updates
 	if a.sseBroker != nil {
 		a.sseBroker.PublishEntityUpdate(appID)
-	}
+		}
 
-	// Log entity upsert to audit trail
+		// Log entity upsert to audit trail
 	if a.audits != nil {
-		entityRef := req.Type + "::" + req.ID
-		auditCtx := map[string]any{
-			"entity_type": req.Type,
-			"entity_id":   req.ID,
-		}
-		if len(req.Parents) > 0 {
-			auditCtx["parents"] = req.Parents
-		}
+			entityRef := req.Type + "::" + req.ID
+			auditCtx := map[string]any{
+				"entity_type": req.Type,
+				"entity_id":   req.ID,
+			}
+			if len(req.Parents) > 0 {
+				auditCtx["parents"] = req.Parents
+			}
 		_ = a.audits.Log(r.Context(), &appID, "api", "entity.upsert", entityRef, "", auditCtx)
-	}
+		}
 
-	w.WriteHeader(http.StatusNoContent)
+		w.WriteHeader(http.StatusNoContent)
 }
 
 // @Summary List Entities
@@ -983,19 +1441,19 @@ func (a *API) handleUpsertEntity(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} map[string]string
 // @Router /v1/apps/{id}/entities [get]
 func (a *API) handleListEntities(w http.ResponseWriter, r *http.Request) {
-	appID, err := parseIDParam(r, "id")
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid app id"})
-		return
-	}
+		appID, err := parseIDParam(r, "id")
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "invalid app id"})
+			return
+		}
 	entitiesMap, err := a.entities.Entities(r.Context(), appID)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
-	json.NewEncoder(w).Encode(entitiesMap)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(entitiesMap)
 }
 
 // @Summary List Schemas
@@ -1009,22 +1467,22 @@ func (a *API) handleListEntities(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} map[string]string
 // @Router /v1/apps/{id}/schemas [get]
 func (a *API) handleListSchemas(w http.ResponseWriter, r *http.Request) {
-	appID, err := parseIDParam(r, "id")
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid app id"})
-		return
-	}
+			appID, err := parseIDParam(r, "id")
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid app id"})
+				return
+			}
 	items, err := a.schemas.ListSchemas(r.Context(), appID)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
-	if items == nil {
-		items = []storage.Schema{}
-	}
-	json.NewEncoder(w).Encode(items)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			if items == nil {
+				items = []storage.Schema{}
+			}
+			json.NewEncoder(w).Encode(items)
 }
 
 // @Summary Create Schema
@@ -1040,50 +1498,50 @@ func (a *API) handleListSchemas(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {object} map[string]string
 // @Router /v1/apps/{id}/schemas [post]
 func (a *API) handleCreateSchema(w http.ResponseWriter, r *http.Request) {
-	appID, err := parseIDParam(r, "id")
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid app id"})
-		return
-	}
+			appID, err := parseIDParam(r, "id")
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid app id"})
+				return
+			}
 
-	var req createSchemaRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid request payload"})
-		return
-	}
-	if req.SchemaText == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "schema_text is required"})
-		return
-	}
+			var req createSchemaRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid request payload"})
+				return
+			}
+			if req.SchemaText == "" {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "schema_text is required"})
+				return
+			}
 
-	// Validate Cedar schema syntax (JSON format)
-	var schemaCheck map[string]any
-	if err := json.Unmarshal([]byte(req.SchemaText), &schemaCheck); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid cedar schema JSON: " + err.Error()})
-		return
-	}
+			// Validate Cedar schema syntax (JSON format)
+			var schemaCheck map[string]any
+			if err := json.Unmarshal([]byte(req.SchemaText), &schemaCheck); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid cedar schema JSON: " + err.Error()})
+				return
+			}
 
 	schemaID, version, err := a.schemas.CreateSchema(r.Context(), appID, req.SchemaText, req.Activate)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
 
-	// Log schema creation to audit trail
+			// Log schema creation to audit trail
 	if a.audits != nil {
-		auditCtx := map[string]any{
-			"version":   version,
-			"activated": req.Activate,
-		}
+				auditCtx := map[string]any{
+					"version":   version,
+					"activated": req.Activate,
+				}
 		_ = a.audits.Log(r.Context(), &appID, "api", "schema.create", "", "", auditCtx)
-	}
+			}
 
-	json.NewEncoder(w).Encode(map[string]any{"schema_id": schemaID, "version": version})
+			json.NewEncoder(w).Encode(map[string]any{"schema_id": schemaID, "version": version})
 }
 
 // @Summary Get Active Schema
@@ -1097,24 +1555,24 @@ func (a *API) handleCreateSchema(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {object} map[string]string
 // @Router /v1/apps/{id}/schemas/active [get]
 func (a *API) handleGetActiveSchema(w http.ResponseWriter, r *http.Request) {
-	appID, err := parseIDParam(r, "id")
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid app id"})
-		return
-	}
+			appID, err := parseIDParam(r, "id")
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid app id"})
+				return
+			}
 	schema, err := a.schemas.GetActiveSchema(r.Context(), appID)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
-	if schema == nil {
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]string{"error": "no active schema"})
-		return
-	}
-	json.NewEncoder(w).Encode(schema)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			if schema == nil {
+				w.WriteHeader(http.StatusNotFound)
+				json.NewEncoder(w).Encode(map[string]string{"error": "no active schema"})
+				return
+			}
+			json.NewEncoder(w).Encode(schema)
 }
 
 // @Summary Activate Schema
@@ -1130,40 +1588,40 @@ func (a *API) handleGetActiveSchema(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {object} map[string]string
 // @Router /v1/apps/{id}/schemas/activate [post]
 func (a *API) handleActivateSchema(w http.ResponseWriter, r *http.Request) {
-	appID, err := parseIDParam(r, "id")
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid app id"})
-		return
-	}
+			appID, err := parseIDParam(r, "id")
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid app id"})
+				return
+			}
 
-	var req activateSchemaRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid request payload"})
-		return
-	}
-	if req.Version <= 0 {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "version is required"})
-		return
-	}
+			var req activateSchemaRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid request payload"})
+				return
+			}
+			if req.Version <= 0 {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "version is required"})
+				return
+			}
 
 	if err := a.schemas.ActivateSchema(r.Context(), appID, req.Version); err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
 
-	// Log schema activation to audit trail
+			// Log schema activation to audit trail
 	if a.audits != nil {
-		auditCtx := map[string]any{
-			"version": req.Version,
-		}
+				auditCtx := map[string]any{
+					"version": req.Version,
+				}
 		_ = a.audits.Log(r.Context(), &appID, "api", "schema.activate", "", "", auditCtx)
-	}
+			}
 
-	w.WriteHeader(http.StatusNoContent)
+			w.WriteHeader(http.StatusNoContent)
 }
 
 // @Summary List Permissions
@@ -1179,34 +1637,34 @@ func (a *API) handleActivateSchema(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {object} map[string]string
 // @Router /v1/apps/{id}/permissions [get]
 func (a *API) handleListPermissions(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json")
 
-	appID, err := parseIDParam(r, "id")
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid app id"})
-		return
-	}
+		appID, err := parseIDParam(r, "id")
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "invalid app id"})
+			return
+		}
 
-	principalType := r.URL.Query().Get("principal_type")
-	principalID := r.URL.Query().Get("principal_id")
+		principalType := r.URL.Query().Get("principal_type")
+		principalID := r.URL.Query().Get("principal_id")
 
-	if principalType == "" || principalID == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "principal_type and principal_id query parameters are required"})
-		return
-	}
+		if principalType == "" || principalID == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "principal_type and principal_id query parameters are required"})
+			return
+		}
 
-	// Create permissions service with entity adapter for group memberships
+		// Create permissions service with entity adapter for group memberships
 	groupProvider := &entityGroupAdapter{entities: a.entities}
 	permSvc := authz.NewPermissionsService(a.policies, groupProvider)
 
-	result, err := permSvc.ListPermissions(r.Context(), appID, principalType, principalID)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
+		result, err := permSvc.ListPermissions(r.Context(), appID, principalType, principalID)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
 
 	// Filter out PolicyID unless debug mode is enabled
 	debug := r.URL.Query().Get("debug") == "true"
@@ -1216,7 +1674,7 @@ func (a *API) handleListPermissions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	json.NewEncoder(w).Encode(result)
+		json.NewEncoder(w).Encode(result)
 }
 
 // @Summary List Audit Logs
@@ -1234,44 +1692,44 @@ func (a *API) handleListPermissions(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} map[string]string
 // @Router /v1/audit [get]
 func (a *API) handleListAuditLogs(w http.ResponseWriter, r *http.Request) {
-	filter := storage.AuditFilter{
-		Limit:  50,
-		Offset: 0,
-	}
+			filter := storage.AuditFilter{
+				Limit:  50,
+				Offset: 0,
+			}
 
-	// Parse query params
-	if v := r.URL.Query().Get("application_id"); v != "" {
-		if id, err := strconv.ParseInt(v, 10, 64); err == nil {
-			filter.ApplicationID = &id
-		}
-	}
-	if v := r.URL.Query().Get("action"); v != "" {
-		filter.Action = v
-	}
-	if v := r.URL.Query().Get("decision"); v != "" {
-		filter.Decision = v
-	}
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
-			filter.Limit = n
-		}
-	}
-	if v := r.URL.Query().Get("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			filter.Offset = n
-		}
-	}
+			// Parse query params
+			if v := r.URL.Query().Get("application_id"); v != "" {
+				if id, err := strconv.ParseInt(v, 10, 64); err == nil {
+					filter.ApplicationID = &id
+				}
+			}
+			if v := r.URL.Query().Get("action"); v != "" {
+				filter.Action = v
+			}
+			if v := r.URL.Query().Get("decision"); v != "" {
+				filter.Decision = v
+			}
+			if v := r.URL.Query().Get("limit"); v != "" {
+				if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
+					filter.Limit = n
+				}
+			}
+			if v := r.URL.Query().Get("offset"); v != "" {
+				if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+					filter.Offset = n
+				}
+			}
 
 	items, total, err := a.audits.List(r.Context(), filter)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
-	if items == nil {
-		items = []storage.AuditLog{}
-	}
-	json.NewEncoder(w).Encode(auditListResponse{Items: items, Total: total})
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			if items == nil {
+				items = []storage.AuditLog{}
+			}
+			json.NewEncoder(w).Encode(auditListResponse{Items: items, Total: total})
 }
 
 func parseIDParam(r *http.Request, key string) (int64, error) {

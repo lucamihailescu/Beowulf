@@ -1,0 +1,145 @@
+#!/bin/sh
+# update_backends.sh - Dynamically updates Nginx upstream configuration
+# based on approved and healthy backend instances from the Cedar API.
+#
+# This script runs in a loop, periodically fetching the list of live backends
+# and updating Nginx configuration when changes are detected.
+
+set -e
+
+# Configuration
+HTTP_UPSTREAM_CONFIG="/etc/nginx/conf.d/backend_upstreams.conf"
+GRPC_UPSTREAM_CONFIG="/etc/nginx/conf.d/grpc_upstreams.conf"
+TEMP_HTTP_CONFIG="/tmp/backend_upstreams.conf.tmp"
+TEMP_GRPC_CONFIG="/tmp/grpc_upstreams.conf.tmp"
+
+# Use Docker DNS to reach any backend instance directly
+# This bypasses our dynamic upstream to avoid chicken-and-egg problem
+DISCOVERY_ENDPOINT="http://backend:8080/v1/cluster/live-backends"
+
+# How often to check for changes (in seconds)
+CHECK_INTERVAL="${BACKEND_CHECK_INTERVAL:-10}"
+
+# Wait for backend to be available
+STARTUP_WAIT="${STARTUP_WAIT:-30}"
+
+echo "[$(date)] Starting Nginx backend discovery service..."
+echo "[$(date)] Discovery endpoint: $DISCOVERY_ENDPOINT"
+echo "[$(date)] Check interval: ${CHECK_INTERVAL}s"
+
+# Create initial empty upstream configs if they don't exist
+create_initial_config() {
+    if [ ! -f "$HTTP_UPSTREAM_CONFIG" ]; then
+        echo "# Initial configuration - waiting for backends" > "$HTTP_UPSTREAM_CONFIG"
+        echo "server 127.0.0.1:1 down;" >> "$HTTP_UPSTREAM_CONFIG"
+    fi
+    if [ ! -f "$GRPC_UPSTREAM_CONFIG" ]; then
+        echo "# Initial configuration - waiting for backends" > "$GRPC_UPSTREAM_CONFIG"
+        echo "server 127.0.0.1:1 down;" >> "$GRPC_UPSTREAM_CONFIG"
+    fi
+}
+
+# Wait for backend service to become available
+wait_for_backend() {
+    echo "[$(date)] Waiting for backend service to become available..."
+    attempts=0
+    max_attempts=$((STARTUP_WAIT / 2))
+    
+    while [ $attempts -lt $max_attempts ]; do
+        if curl -s --fail --connect-timeout 2 -m 5 "$DISCOVERY_ENDPOINT" > /dev/null 2>&1; then
+            echo "[$(date)] Backend service is available"
+            return 0
+        fi
+        attempts=$((attempts + 1))
+        echo "[$(date)] Waiting for backend... (attempt $attempts/$max_attempts)"
+        sleep 2
+    done
+    
+    echo "[$(date)] Warning: Backend service not available after ${STARTUP_WAIT}s, continuing anyway"
+    return 1
+}
+
+# Fetch backend list and generate upstream configs
+update_configs() {
+    # Fetch the live backend list
+    response=$(curl -s --fail --connect-timeout 2 -m 5 "$DISCOVERY_ENDPOINT" 2>/dev/null) || {
+        echo "[$(date)] Failed to fetch backend list"
+        return 1
+    }
+    
+    # Write HTTP upstream config
+    echo "$response" > "$TEMP_HTTP_CONFIG"
+    
+    # Generate gRPC upstream config (same hosts, different port)
+    echo "# Auto-generated gRPC upstream - do not edit manually" > "$TEMP_GRPC_CONFIG"
+    echo "# Generated at: $(date -Iseconds)" >> "$TEMP_GRPC_CONFIG"
+    
+    # Extract server lines and change port to 50051
+    echo "$response" | grep "^server " | sed 's/:8080;/:50051;/' >> "$TEMP_GRPC_CONFIG"
+    
+    # If no server lines, add placeholder
+    if ! grep -q "^server " "$TEMP_GRPC_CONFIG"; then
+        echo "server 127.0.0.1:1 down;" >> "$TEMP_GRPC_CONFIG"
+    fi
+    
+    return 0
+}
+
+# Check if configs changed and reload nginx if needed
+apply_changes() {
+    changed=0
+    
+    # Check HTTP config
+    if [ -f "$TEMP_HTTP_CONFIG" ]; then
+        if ! cmp -s "$TEMP_HTTP_CONFIG" "$HTTP_UPSTREAM_CONFIG" 2>/dev/null; then
+            echo "[$(date)] HTTP upstream config changed"
+            cat "$TEMP_HTTP_CONFIG"
+            mv "$TEMP_HTTP_CONFIG" "$HTTP_UPSTREAM_CONFIG"
+            changed=1
+        else
+            rm -f "$TEMP_HTTP_CONFIG"
+        fi
+    fi
+    
+    # Check gRPC config
+    if [ -f "$TEMP_GRPC_CONFIG" ]; then
+        if ! cmp -s "$TEMP_GRPC_CONFIG" "$GRPC_UPSTREAM_CONFIG" 2>/dev/null; then
+            echo "[$(date)] gRPC upstream config changed"
+            cat "$TEMP_GRPC_CONFIG"
+            mv "$TEMP_GRPC_CONFIG" "$GRPC_UPSTREAM_CONFIG"
+            changed=1
+        else
+            rm -f "$TEMP_GRPC_CONFIG"
+        fi
+    fi
+    
+    # Reload Nginx if configs changed
+    if [ $changed -eq 1 ]; then
+        echo "[$(date)] Reloading Nginx..."
+        if nginx -t 2>/dev/null; then
+            nginx -s reload
+            echo "[$(date)] Nginx reloaded successfully"
+        else
+            echo "[$(date)] ERROR: Nginx config test failed!"
+            nginx -t
+        fi
+    fi
+}
+
+# Main loop
+main() {
+    create_initial_config
+    wait_for_backend
+    
+    echo "[$(date)] Starting main discovery loop..."
+    
+    while true; do
+        if update_configs; then
+            apply_changes
+        fi
+        sleep "$CHECK_INTERVAL"
+    done
+}
+
+main
+

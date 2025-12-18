@@ -224,3 +224,40 @@ func setCacheSource(ctx context.Context, source string) {
 		*ptr = source
 	}
 }
+
+// CacheStatistics holds cache statistics for health monitoring.
+type CacheStatistics struct {
+	L1Size    int
+	L2Enabled bool
+	HitRate   float64
+}
+
+// Ping checks if Redis is reachable.
+func (c *Cache) Ping(ctx context.Context) error {
+	if c == nil || c.rdb == nil {
+		return fmt.Errorf("cache not configured")
+	}
+	return c.rdb.Ping(ctx).Err()
+}
+
+// Stats returns cache statistics for health monitoring.
+func (c *Cache) Stats() CacheStatistics {
+	if c == nil {
+		return CacheStatistics{}
+	}
+
+	stats := CacheStatistics{
+		L2Enabled: c.rdb != nil,
+	}
+
+	if c.local != nil {
+		stats.L1Size = c.local.ItemCount()
+	}
+
+	// Note: go-cache doesn't track hit/miss by default.
+	// For a more accurate hit rate, you'd need to wrap Get calls.
+	// For now, we return 0 (unknown).
+	stats.HitRate = 0
+
+	return stats
+}

@@ -9,6 +9,7 @@ import {
   Alert,
   Popconfirm,
   message,
+  Tabs,
 } from "antd";
 import {
   CloudOutlined,
@@ -17,9 +18,11 @@ import {
   SettingOutlined,
   DeleteOutlined,
   ReloadOutlined,
+  SafetyCertificateOutlined,
 } from "@ant-design/icons";
 import { api, EntraSettings } from "../api";
 import { EntraSetupWizard } from "../components/EntraSetupWizard";
+import BackendAuthSettings from "../components/BackendAuthSettings";
 
 const { Title, Paragraph } = Typography;
 
@@ -59,6 +62,138 @@ export default function Settings() {
     }
   };
 
+  const tabItems = [
+    {
+      key: "entra",
+      label: (
+        <Space>
+          <CloudOutlined style={{ color: "#0078d4" }} />
+          Microsoft Entra ID
+        </Space>
+      ),
+      children: (
+        <>
+          <Card
+            title={
+              <Space>
+                <CloudOutlined style={{ color: "#0078d4" }} />
+                <span>Microsoft Entra ID Integration</span>
+              </Space>
+            }
+            loading={loading}
+            extra={
+              <Space>
+                <Button
+                  icon={<ReloadOutlined />}
+                  onClick={loadSettings}
+                  loading={loading}
+                >
+                  Refresh
+                </Button>
+                {entraSettings?.configured && !entraSettings?.configured_from_env && (
+                  <Popconfirm
+                    title="Delete Entra Settings"
+                    description="Are you sure you want to remove the Entra configuration?"
+                    onConfirm={handleDelete}
+                    okText="Delete"
+                    okButtonProps={{ danger: true }}
+                  >
+                    <Button
+                      danger
+                      icon={<DeleteOutlined />}
+                      loading={deleting}
+                    >
+                      Remove
+                    </Button>
+                  </Popconfirm>
+                )}
+                <Button
+                  type="primary"
+                  onClick={() => setShowWizard(true)}
+                >
+                  {entraSettings?.configured ? "Reconfigure" : "Set Up"}
+                </Button>
+              </Space>
+            }
+          >
+            {!entraSettings?.configured ? (
+              <Alert
+                type="info"
+                showIcon
+                icon={<CloudOutlined />}
+                message="Entra ID Not Configured"
+                description="Connect to Microsoft Entra ID to enable searching users and groups when creating policies."
+                action={
+                  <Button type="primary" onClick={() => setShowWizard(true)}>
+                    Set Up Entra ID
+                  </Button>
+                }
+              />
+            ) : (
+              <Space direction="vertical" style={{ width: "100%" }} size={16}>
+                <Alert
+                  type="success"
+                  showIcon
+                  icon={<CheckCircleOutlined />}
+                  message="Entra ID is configured and active"
+                />
+
+                <Descriptions column={1} bordered size="small">
+                  <Descriptions.Item label="Status">
+                    <Tag color="success" icon={<CheckCircleOutlined />}>
+                      Connected
+                    </Tag>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Tenant ID">
+                    <Typography.Text code>{entraSettings.tenant_id}</Typography.Text>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Client ID">
+                    <Typography.Text code>{entraSettings.client_id}</Typography.Text>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Client Secret">
+                    {entraSettings.has_client_secret ? (
+                      <Tag color="success">Configured</Tag>
+                    ) : (
+                      <Tag color="error" icon={<CloseCircleOutlined />}>
+                        Not Set
+                      </Tag>
+                    )}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Configuration Source">
+                    {entraSettings.configured_from_env ? (
+                      <Tag color="blue">Environment Variables</Tag>
+                    ) : (
+                      <Tag color="purple">Database Settings</Tag>
+                    )}
+                  </Descriptions.Item>
+                </Descriptions>
+
+                {entraSettings.configured_from_env && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message="Configured via Environment Variables"
+                    description="Entra settings are currently loaded from environment variables. You can override them by saving new settings through this interface, which will take precedence."
+                  />
+                )}
+              </Space>
+            )}
+          </Card>
+        </>
+      ),
+    },
+    {
+      key: "backend-auth",
+      label: (
+        <Space>
+          <SafetyCertificateOutlined />
+          Backend Authentication
+        </Space>
+      ),
+      children: <BackendAuthSettings />,
+    },
+  ];
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
       <div>
@@ -70,115 +205,7 @@ export default function Settings() {
         </Paragraph>
       </div>
 
-      {/* Entra ID Settings */}
-      <Card
-        title={
-          <Space>
-            <CloudOutlined style={{ color: "#0078d4" }} />
-            <span>Microsoft Entra ID Integration</span>
-          </Space>
-        }
-        loading={loading}
-        extra={
-          <Space>
-            <Button
-              icon={<ReloadOutlined />}
-              onClick={loadSettings}
-              loading={loading}
-            >
-              Refresh
-            </Button>
-            {entraSettings?.configured && !entraSettings?.configured_from_env && (
-              <Popconfirm
-                title="Delete Entra Settings"
-                description="Are you sure you want to remove the Entra configuration?"
-                onConfirm={handleDelete}
-                okText="Delete"
-                okButtonProps={{ danger: true }}
-              >
-                <Button
-                  danger
-                  icon={<DeleteOutlined />}
-                  loading={deleting}
-                >
-                  Remove
-                </Button>
-              </Popconfirm>
-            )}
-            <Button
-              type="primary"
-              onClick={() => setShowWizard(true)}
-            >
-              {entraSettings?.configured ? "Reconfigure" : "Set Up"}
-            </Button>
-          </Space>
-        }
-      >
-        {!entraSettings?.configured ? (
-          <Alert
-            type="info"
-            showIcon
-            icon={<CloudOutlined />}
-            message="Entra ID Not Configured"
-            description="Connect to Microsoft Entra ID to enable searching users and groups when creating policies."
-            action={
-              <Button type="primary" onClick={() => setShowWizard(true)}>
-                Set Up Entra ID
-              </Button>
-            }
-          />
-        ) : (
-          <Space direction="vertical" style={{ width: "100%" }} size={16}>
-            <Alert
-              type="success"
-              showIcon
-              icon={<CheckCircleOutlined />}
-              message="Entra ID is configured and active"
-            />
-
-            <Descriptions column={1} bordered size="small">
-              <Descriptions.Item label="Status">
-                <Tag color="success" icon={<CheckCircleOutlined />}>
-                  Connected
-                </Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="Tenant ID">
-                <Typography.Text code>{entraSettings.tenant_id}</Typography.Text>
-              </Descriptions.Item>
-              <Descriptions.Item label="Client ID">
-                <Typography.Text code>{entraSettings.client_id}</Typography.Text>
-              </Descriptions.Item>
-              <Descriptions.Item label="Client Secret">
-                {entraSettings.has_client_secret ? (
-                  <Tag color="success">Configured</Tag>
-                ) : (
-                  <Tag color="error" icon={<CloseCircleOutlined />}>
-                    Not Set
-                  </Tag>
-                )}
-              </Descriptions.Item>
-              <Descriptions.Item label="Configuration Source">
-                {entraSettings.configured_from_env ? (
-                  <Tag color="blue">Environment Variables</Tag>
-                ) : (
-                  <Tag color="purple">Database Settings</Tag>
-                )}
-              </Descriptions.Item>
-            </Descriptions>
-
-            {entraSettings.configured_from_env && (
-              <Alert
-                type="warning"
-                showIcon
-                message="Configured via Environment Variables"
-                description="Entra settings are currently loaded from environment variables. You can override them by saving new settings through this interface, which will take precedence."
-              />
-            )}
-          </Space>
-        )}
-      </Card>
-
-      {/* More settings cards can be added here in the future */}
+      <Tabs items={tabItems} defaultActiveKey="entra" />
 
       <EntraSetupWizard
         open={showWizard}

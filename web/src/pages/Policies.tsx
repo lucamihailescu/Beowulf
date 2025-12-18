@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Checkbox, Col, Collapse, Input, Modal, Row, Select, Space, Table, Tabs, Tag, Typography, theme } from "antd";
-import { FileTextOutlined, PlusOutlined, ThunderboltOutlined, EyeOutlined, AppstoreOutlined } from "@ant-design/icons";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { Alert, Button, Card, Checkbox, Col, Collapse, Input, Modal, Row, Select, Space, Table, Tabs, Tag, Typography, theme, message } from "antd";
+import { FileTextOutlined, PlusOutlined, ThunderboltOutlined, EyeOutlined, AppstoreOutlined, WifiOutlined, ExperimentOutlined } from "@ant-design/icons";
 import { api, type Application, type AuthorizeResponse, type CedarEntity, type PolicyDetails, type PolicySummary } from "../api";
 import PolicyDragDropBuilder from "../components/PolicyDragDropBuilder";
 import PolicyTemplateWizard from "../components/PolicyTemplateWizard";
+import PolicySimulator from "../components/PolicySimulator";
+import { usePolicyUpdates, useSSEContext } from "../contexts/SSEContext";
 
 const DEFAULT_POLICY = `permit (
   principal == User::"alice",
@@ -49,8 +51,54 @@ export default function Policies() {
 
   const [activeTab, setActiveTab] = useState("view");
   const [templateWizardOpen, setTemplateWizardOpen] = useState(false);
+  const [simulatorOpen, setSimulatorOpen] = useState(false);
+
+  // Debug logging for simulator
+  console.log('[Policies] simulatorOpen:', simulatorOpen, 'selectedPolicy:', selectedPolicy?.id, 'editPolicyText length:', editPolicyText.length);
 
   const selectedApp = useMemo(() => apps.find((a) => a.id === selectedAppId), [apps, selectedAppId]);
+
+  // Get SSE connection status
+  const { connected: sseConnected } = useSSEContext();
+
+  // Load policies function that can be called from SSE handler
+  const loadPolicies = useCallback(async () => {
+    if (selectedAppId === "") {
+      setPolicies([]);
+      return;
+    }
+    setPoliciesLoading(true);
+    try {
+      const items = await api.listPolicies(selectedAppId);
+      setPolicies(Array.isArray(items) ? items : []);
+    } catch (e) {
+      setError((e as Error).message);
+      setPolicies([]);
+    } finally {
+      setPoliciesLoading(false);
+    }
+  }, [selectedAppId]);
+
+  // Track last SSE refresh to debounce
+  const lastSSERefresh = useRef<number>(0);
+
+  // Subscribe to policy updates via SSE
+  usePolicyUpdates(useCallback((event) => {
+    // Only refresh if the update is for the currently selected app
+    if (selectedAppId !== "" && (event.data?.application_id === selectedAppId || !event.data?.application_id)) {
+      // Debounce: Don't refresh more than once per 3 seconds
+      const now = Date.now();
+      if (now - lastSSERefresh.current < 3000) {
+        console.log('[Policies] Skipping SSE refresh - too soon');
+        return;
+      }
+      lastSSERefresh.current = now;
+      
+      console.log('[Policies] Received policy update via SSE, refreshing...');
+      message.info({ content: 'Policy updated - refreshing list...', key: 'sse-refresh', duration: 2 });
+      loadPolicies();
+    }
+  }, [selectedAppId, loadPolicies]));
 
   useEffect(() => {
     (async () => {
@@ -75,24 +123,8 @@ export default function Policies() {
   }, [apps, selectedAppId]);
 
   useEffect(() => {
-    if (selectedAppId === "") {
-      setPolicies([]);
-      return;
-    }
-
-    (async () => {
-      setPoliciesLoading(true);
-      try {
-        const items = await api.listPolicies(selectedAppId);
-        setPolicies(Array.isArray(items) ? items : []);
-      } catch (e) {
-        setError((e as Error).message);
-        setPolicies([]);
-      } finally {
-        setPoliciesLoading(false);
-      }
-    })();
-  }, [selectedAppId]);
+    loadPolicies();
+  }, [loadPolicies]);
 
   useEffect(() => {
     if (selectedAppId === "") {
@@ -709,22 +741,34 @@ export default function Policies() {
         onCancel={closePolicyModal}
         width={700}
         footer={
-          <Space>
-            <Button onClick={closePolicyModal}>Cancel</Button>
+          <Space style={{ width: "100%", justifyContent: "space-between" }}>
             <Button
-              onClick={() => setEditPolicyText(selectedPolicy?.active_policy_text || "")}
-              disabled={!selectedPolicy?.active_policy_text}
-            >
-              Load Active Version
-            </Button>
-            <Button
-              type="primary"
-              onClick={onSaveExistingPolicy}
-              loading={savingExisting}
+              icon={<ExperimentOutlined />}
+              onClick={() => {
+                console.log('[Policies] Simulate Impact clicked, opening simulator');
+                setSimulatorOpen(true);
+              }}
               disabled={!selectedPolicy || !editPolicyText.trim()}
             >
-              Save New Version
+              Simulate Impact
             </Button>
+            <Space>
+              <Button onClick={closePolicyModal}>Cancel</Button>
+              <Button
+                onClick={() => setEditPolicyText(selectedPolicy?.active_policy_text || "")}
+                disabled={!selectedPolicy?.active_policy_text}
+              >
+                Load Active Version
+              </Button>
+              <Button
+                type="primary"
+                onClick={onSaveExistingPolicy}
+                loading={savingExisting}
+                disabled={!selectedPolicy || !editPolicyText.trim()}
+              >
+                Save New Version
+              </Button>
+            </Space>
           </Space>
         }
       >
@@ -784,6 +828,19 @@ export default function Policies() {
         entityTypes={entityTypes}
         actions={[]}
       />
+
+      {/* Policy Simulator */}
+      {selectedPolicy && selectedAppId !== "" && (
+        <PolicySimulator
+          appId={selectedAppId}
+          policyId={selectedPolicy.id}
+          policyName={selectedPolicy.name}
+          currentPolicyText={selectedPolicy.active_policy_text || selectedPolicy.latest_policy_text || ""}
+          newPolicyText={editPolicyText}
+          visible={simulatorOpen}
+          onClose={() => setSimulatorOpen(false)}
+        />
+      )}
     </Space>
   );
 }

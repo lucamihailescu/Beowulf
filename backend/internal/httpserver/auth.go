@@ -244,7 +244,7 @@ func NewRateLimiter(cfg config.Config) func(http.Handler) http.Handler {
 
 	log.Printf("Rate limiting enabled: %d requests per %v per caller", cfg.RateLimitRequests, cfg.RateLimitWindow)
 
-	return httprate.Limit(
+	limiter := httprate.Limit(
 		cfg.RateLimitRequests,
 		cfg.RateLimitWindow,
 		httprate.WithKeyFuncs(func(r *http.Request) (string, error) {
@@ -264,6 +264,20 @@ func NewRateLimiter(cfg config.Config) func(http.Handler) http.Handler {
 			})
 		}),
 	)
+
+	// Wrap to exclude certain paths from rate limiting
+	return func(next http.Handler) http.Handler {
+		limited := limiter(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			path := r.URL.Path
+			// Skip rate limiting for SSE, health checks, and cluster status
+			if path == "/v1/events" || path == "/health" || strings.HasPrefix(path, "/v1/cluster/") {
+				next.ServeHTTP(w, r)
+				return
+			}
+			limited.ServeHTTP(w, r)
+		})
+	}
 }
 
 // RateLimitWindow returns the window duration for rate limiting headers.

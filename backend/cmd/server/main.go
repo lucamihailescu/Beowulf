@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -12,6 +14,7 @@ import (
 	"cedar/internal/config"
 	internalgrpc "cedar/internal/grpc"
 	"cedar/internal/httpserver"
+	"cedar/internal/simulation"
 	"cedar/internal/storage"
 )
 
@@ -34,6 +37,9 @@ func main() {
 	auditRepo := storage.NewAuditRepo(db)
 	namespaceRepo := storage.NewNamespaceRepo(db)
 	settingsRepo := storage.NewSettingsRepo(db)
+	backendAuthRepo := storage.NewBackendAuthRepo(db.Writer())
+	backendInstanceRepo := storage.NewBackendInstanceRepo(db.Writer())
+	backendInstanceRepo.SetAuthRepo(backendAuthRepo) // For auto-approval when approval_required is false
 
 	var cache *storage.Cache
 	redisClient := storage.NewRedis(cfg.RedisAddr, cfg.RedisPass)
@@ -59,6 +65,20 @@ func main() {
 
 	authzSvc := authz.NewService(policyProvider, entityProvider)
 
+	// Create simulation service
+	simRepo := storage.NewSimulationRepo(db)
+	simSvc := simulation.NewService(simRepo, policyRepo, entityRepo, nil) // nil for audit log reader (falls back to sample data)
+
+	// Create instance registry for cluster discovery (requires Redis)
+	var instanceRegistry *storage.InstanceRegistry
+	if redisClient != nil {
+		hostname, _ := os.Hostname()
+		instanceID := fmt.Sprintf("%s-%d", hostname, time.Now().UnixNano()%10000)
+		instanceRegistry = storage.NewInstanceRegistry(redisClient, instanceID)
+		// Connect to database for persistent registration and approval workflow
+		instanceRegistry.SetBackendInstanceRepo(backendInstanceRepo)
+	}
+
 	// Start gRPC server
 	grpcServer := internalgrpc.NewServer(cfg, authzSvc)
 	go func() {
@@ -67,7 +87,13 @@ func main() {
 		}
 	}()
 
-	r := httpserver.NewRouter(cfg, authzSvc, appRepo, policyRepo, entityRepo, schemaRepo, auditRepo, namespaceRepo, settingsRepo, cache)
+	r := httpserver.NewRouter(cfg, authzSvc, appRepo, policyRepo, entityRepo, schemaRepo, auditRepo, namespaceRepo, settingsRepo, backendAuthRepo, backendInstanceRepo, cache, cache, db, instanceRegistry, simSvc)
+
+	// Start instance registry heartbeat (after router sets the status function)
+	if instanceRegistry != nil {
+		instanceRegistry.Start(ctx)
+		defer instanceRegistry.Stop(context.Background())
+	}
 
 	srv := &http.Server{
 		Addr:              cfg.Addr(),

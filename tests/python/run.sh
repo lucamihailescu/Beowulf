@@ -25,3 +25,9 @@ python test_rest_entitlements.py
 echo "Running Cache Validation tests..."
 python test_authorize_cache.py
 
+echo "Running Load Balancing tests..."
+python test_load_balancing.py
+
+echo "Running MCP Integration tests..."
+python test_mcp_integration.py
+

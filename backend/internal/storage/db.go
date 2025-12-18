@@ -68,3 +68,16 @@ func (db *DB) Writer() *pgxpool.Pool {
 func (db *DB) Reader() *pgxpool.Pool {
 	return db.readPool
 }
+
+// PingContext checks if the database connection is alive.
+func (db *DB) PingContext(ctx context.Context) error {
+	if err := db.writePool.Ping(ctx); err != nil {
+		return fmt.Errorf("write pool: %w", err)
+	}
+	if db.readPool != db.writePool {
+		if err := db.readPool.Ping(ctx); err != nil {
+			return fmt.Errorf("read pool: %w", err)
+		}
+	}
+	return nil
+}

@@ -4,6 +4,7 @@ import { AppstoreOutlined, FileProtectOutlined, AuditOutlined, SettingOutlined, 
 import { Link } from "react-router-dom";
 import { api, type Application, type EntraSettings } from "../api";
 import { EntraSetupWizard } from "../components/EntraSetupWizard";
+import ClusterStatus from "../components/ClusterStatus";
 
 export default function Dashboard() {
   const [apps, setApps] = useState<Application[]>([]);
@@ -78,7 +79,7 @@ export default function Dashboard() {
 
       {/* Stats */}
       <Row gutter={[16, 16]}>
-        <Col xs={12} md={6}>
+        <Col xs={12} md={8}>
           <Card loading={loading}>
             <Statistic
               title="Applications"
@@ -87,7 +88,7 @@ export default function Dashboard() {
             />
           </Card>
         </Col>
-        <Col xs={12} md={6}>
+        <Col xs={12} md={8}>
           <Card loading={loading}>
             <Statistic
               title="Namespaces"
@@ -96,17 +97,7 @@ export default function Dashboard() {
             />
           </Card>
         </Col>
-        <Col xs={12} md={6}>
-          <Card>
-            <Statistic
-              title="Status"
-              value="Healthy"
-              prefix={<SafetyOutlined style={{ color: "#52c41a" }} />}
-              valueStyle={{ color: "#52c41a" }}
-            />
-          </Card>
-        </Col>
-        <Col xs={12} md={6}>
+        <Col xs={24} md={8}>
           <Card>
             <Statistic
               title="Cedar Version"
@@ -116,6 +107,9 @@ export default function Dashboard() {
           </Card>
         </Col>
       </Row>
+
+      {/* Cluster Status */}
+      <ClusterStatus refreshInterval={30000} />
 
       {/* Navigation Cards */}
       <Typography.Title level={4} style={{ margin: 0 }}>

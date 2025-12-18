@@ -21,6 +21,24 @@ services:
     ports:
       - "${REDIS_PORT:-6379}:6379"
 
+  load-balancer:
+    build:
+      context: ./load-balancer
+      dockerfile: Dockerfile
+    container_name: cedar-load-balancer
+    environment:
+      # How often to check for backend changes (seconds)
+      BACKEND_CHECK_INTERVAL: ${BACKEND_CHECK_INTERVAL:-10}
+      # How long to wait for backend on startup (seconds)
+      STARTUP_WAIT: ${STARTUP_WAIT:-30}
+    ports:
+      - "${WEB_PORT:-5173}:80"
+      - "${APP_PORT:-8080}:8080"
+      - "50051:50051"
+    depends_on:
+      - backend
+      - web
+
   backend:
     build:
       context: ./backend
@@ -35,8 +53,8 @@ services:
       # Authentication settings
       AUTH_MODE: ${AUTH_MODE:-none}
       API_KEY: ${API_KEY:-dev-secret-key}
-      # Rate Limiting
-      RATE_LIMIT_REQUESTS: ${RATE_LIMIT_REQUESTS:-100}
+      # Rate Limiting (higher default for development/testing)
+      RATE_LIMIT_REQUESTS: ${RATE_LIMIT_REQUESTS:-500}
       RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-1m}
       AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
       AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
@@ -44,9 +62,10 @@ services:
       AZURE_AUDIENCE: ${AZURE_AUDIENCE:-}
       KERBEROS_KEYTAB: ${KERBEROS_KEYTAB:-}
       KERBEROS_SERVICE: ${KERBEROS_SERVICE:-}
-    ports:
-      - "${APP_PORT:-8080}:8080"
-      - "50051:50051"
+    # Ports are exposed internally for load balancer, not to host
+    expose:
+      - "8080"
+      - "50051"
     depends_on:
       - db
       - redis
@@ -87,8 +106,9 @@ services:
         VITE_AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
         VITE_AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
         VITE_REDIRECT_URI: ${VITE_REDIRECT_URI:-}
-    ports:
-      - "${WEB_PORT:-5173}:80"
+    # Port exposed internally for load balancer, not to host
+    expose:
+      - "80"
     depends_on:
       - backend
 

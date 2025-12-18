@@ -1,6 +1,48 @@
+export type HealthCheck = {
+  status: string;
+  latency?: string;
+  error?: string;
+};
+
 export type HealthResponse = {
   status: string;
   cedar_version?: string;
+  checks?: Record<string, HealthCheck>;
+};
+
+export type CacheStats = {
+  enabled: boolean;
+  l1_size?: number;
+  l2_enabled: boolean;
+  hit_rate?: string;
+};
+
+export type ClusterStatusResponse = {
+  instance_id: string;
+  status: string;
+  uptime: string;
+  cedar_version: string;
+  checks: Record<string, HealthCheck>;
+  cache?: CacheStats;
+  sse_clients: number;
+  started_at: string;
+};
+
+export type InstanceInfo = {
+  instance_id: string;
+  status: string;
+  uptime: string;
+  cedar_version: string;
+  started_at: string;
+  last_heartbeat: string;
+  checks: Record<string, HealthCheck>;
+  cache?: CacheStats;
+  sse_clients: number;
+};
+
+export type ListInstancesResponse = {
+  instances: InstanceInfo[];
+  total: number;
 };
 
 export type Namespace = {
@@ -199,6 +241,163 @@ export type EntraAuthConfig = {
   client_id?: string;
   redirect_uri?: string;
   authority?: string;
+};
+
+// Backend Authentication types
+export type BackendAuthMode = 'none' | 'shared_secret' | 'mtls';
+
+export type BackendAuthConfig = {
+  auth_mode: BackendAuthMode;
+  approval_required?: boolean;
+  ca_configured?: boolean;
+  ca_subject?: string;
+  ca_issuer?: string;
+  ca_not_after?: string;
+  ca_fingerprint?: string;
+  secret_configured?: boolean;
+  updated_at: string;
+};
+
+export type BackendAuthConfigRequest = {
+  auth_mode: BackendAuthMode;
+  ca_certificate?: string;
+  shared_secret?: string;
+};
+
+export type CACertificateRequest = {
+  ca_certificate: string;
+};
+
+// Backend Instance types
+export type BackendInstanceStatus = 'pending' | 'approved' | 'rejected';
+
+export type BackendInstance = {
+  id: number;
+  instance_id: string;
+  hostname: string;
+  ip_address?: string;
+  status: BackendInstanceStatus;
+  cert_fingerprint?: string;
+  cluster_secret_verified: boolean;
+  requested_at: string;
+  approved_at?: string;
+  approved_by?: string;
+  rejected_at?: string;
+  rejected_by?: string;
+  rejection_reason?: string;
+  cedar_version?: string;
+  os_info?: string;
+  arch?: string;
+  last_heartbeat?: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BackendInstancesListResponse = {
+  instances: BackendInstance[];
+  total: number;
+  counts: Record<string, number>;
+};
+
+export type BackendInstanceRegisterRequest = {
+  instance_id: string;
+  hostname: string;
+  ip_address?: string;
+  cert_fingerprint?: string;
+  cluster_secret_verified?: boolean;
+  cedar_version?: string;
+  os_info?: string;
+  arch?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type BackendInstanceRejectRequest = {
+  reason?: string;
+};
+
+// Simulation types
+export type SimulationMode = 'production_replay' | 'sample_data' | 'custom';
+
+export type SimulateRequest = {
+  new_policy_text: string;
+  current_policy_text?: string; // If provided, compare against this instead of the active DB version
+  mode?: SimulationMode;
+  time_range?: string;
+  sample_size?: number;
+  custom_scenarios?: AuthRequest[];
+};
+
+export type AuthRequest = {
+  principal: string;
+  action: string;
+  resource: string;
+  context?: Record<string, unknown>;
+};
+
+export type DecisionSummary = {
+  allow_count: number;
+  deny_count: number;
+};
+
+export type AffectedPrincipal = {
+  principal: string;
+  current_decision: string;
+  new_decision: string;
+  affected_actions: string[];
+  request_count: number;
+};
+
+export type SimulatedRequest = {
+  principal: string;
+  action: string;
+  resource: string;
+  current_decision: string;
+  new_decision: string;
+  determining_policy?: string;
+  determining_reasons?: string;
+};
+
+export type SimulationImpact = {
+  newly_denied: number;
+  newly_allowed: number;
+  affected_principals: AffectedPrincipal[];
+  sample_requests: SimulatedRequest[];
+};
+
+export type SimulateResponse = {
+  simulation_id: number;
+  requests_analyzed: number;
+  current_policy: DecisionSummary;
+  new_policy: DecisionSummary;
+  impact: SimulationImpact;
+  status: string;
+};
+
+export type Simulation = {
+  id: number;
+  application_id: number;
+  policy_id: number;
+  policy_version: number;
+  mode: SimulationMode;
+  time_range?: string;
+  sample_size?: number;
+  requests_analyzed: number;
+  current_allows: number;
+  current_denies: number;
+  new_allows: number;
+  new_denies: number;
+  impact_details?: SimulationImpact;
+  status: string;
+  error_message?: string;
+  created_by: string;
+  created_at: string;
+  completed_at?: string;
+};
+
+export type SimulationListResponse = {
+  simulations: Simulation[];
+  total: number;
 };
 
 function defaultApiBaseUrl(): string {
@@ -420,6 +619,14 @@ export const api = {
     return request<HealthResponse>("/health");
   },
 
+  getClusterStatus(): Promise<ClusterStatusResponse> {
+    return request<ClusterStatusResponse>("/v1/cluster/status");
+  },
+
+  getClusterInstances(): Promise<ListInstancesResponse> {
+    return request<ListInstancesResponse>("/v1/cluster/instances");
+  },
+
   // Entra ID (Azure AD) endpoints
   entra: {
     getStatus(): Promise<EntraStatus> {
@@ -476,12 +683,114 @@ export const api = {
         method: "DELETE",
       });
     },
+
+    // Backend Authentication settings
+    getBackendAuth(): Promise<BackendAuthConfig> {
+      return request<BackendAuthConfig>("/v1/settings/backend-auth");
+    },
+
+    updateBackendAuth(config: BackendAuthConfigRequest): Promise<BackendAuthConfig> {
+      return request<BackendAuthConfig>("/v1/settings/backend-auth", {
+        method: "PUT",
+        body: JSON.stringify(config),
+      });
+    },
+
+    uploadCACertificate(cert: CACertificateRequest): Promise<BackendAuthConfig> {
+      return request<BackendAuthConfig>("/v1/settings/backend-auth/ca", {
+        method: "POST",
+        body: JSON.stringify(cert),
+      });
+    },
+
+    removeCACertificate(): Promise<BackendAuthConfig> {
+      return request<BackendAuthConfig>("/v1/settings/backend-auth/ca", {
+        method: "DELETE",
+      });
+    },
+
+    updateApprovalRequired(required: boolean): Promise<BackendAuthConfig> {
+      return request<BackendAuthConfig>("/v1/settings/backend-auth/approval", {
+        method: "PUT",
+        body: JSON.stringify({ approval_required: required }),
+      });
+    },
+  },
+
+  // Backend instance management
+  backends: {
+    list(status?: BackendInstanceStatus): Promise<BackendInstancesListResponse> {
+      const params = new URLSearchParams();
+      if (status) params.set("status", status);
+      const qs = params.toString();
+      return request<BackendInstancesListResponse>(`/v1/cluster/backends${qs ? `?${qs}` : ""}`);
+    },
+
+    listPending(): Promise<{ instances: BackendInstance[]; total: number }> {
+      return request<{ instances: BackendInstance[]; total: number }>("/v1/cluster/backends/pending");
+    },
+
+    get(instanceId: string): Promise<BackendInstance> {
+      return request<BackendInstance>(`/v1/cluster/backends/${encodeURIComponent(instanceId)}`);
+    },
+
+    approve(instanceId: string): Promise<BackendInstance> {
+      return request<BackendInstance>(`/v1/cluster/backends/${encodeURIComponent(instanceId)}/approve`, {
+        method: "POST",
+      });
+    },
+
+    reject(instanceId: string, reason?: string): Promise<BackendInstance> {
+      return request<BackendInstance>(`/v1/cluster/backends/${encodeURIComponent(instanceId)}/reject`, {
+        method: "POST",
+        body: JSON.stringify({ reason }),
+      });
+    },
+
+    delete(instanceId: string): Promise<{ status: string }> {
+      return request<{ status: string }>(`/v1/cluster/backends/${encodeURIComponent(instanceId)}`, {
+        method: "DELETE",
+      });
+    },
   },
 
   // Auth configuration (public endpoint)
   auth: {
     getConfig(): Promise<EntraAuthConfig> {
       return request<EntraAuthConfig>("/v1/auth/config");
+    },
+  },
+
+  // Simulation endpoints
+  simulation: {
+    /**
+     * Run a policy simulation to see the impact of changes before activating.
+     * @param appId Application ID
+     * @param policyId Policy ID
+     * @param request Simulation parameters including the new policy text
+     */
+    simulate(appId: number, policyId: number, req: SimulateRequest): Promise<SimulateResponse> {
+      return request<SimulateResponse>(`/v1/apps/${appId}/policies/${policyId}/simulate`, {
+        method: "POST",
+        body: JSON.stringify(req),
+      });
+    },
+
+    /**
+     * List previous simulations for a policy.
+     */
+    list(appId: number, policyId: number, limit?: number): Promise<SimulationListResponse> {
+      const params = new URLSearchParams();
+      if (limit) params.set("limit", String(limit));
+      const qs = params.toString();
+      return request<SimulationListResponse>(`/v1/apps/${appId}/policies/${policyId}/simulations${qs ? `?${qs}` : ""}`);
+    },
+
+    /**
+     * Get details of a specific simulation.
+     */
+    get(appId: number, policyId: number, simId: number): Promise<Simulation> {
+      return request<Simulation>(`/v1/apps/${appId}/policies/${policyId}/simulations/${simId}`);
     },
   },
 };

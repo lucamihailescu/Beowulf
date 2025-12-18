@@ -464,6 +464,37 @@ func (r *PolicyRepo) DeletePolicy(ctx context.Context, appID, policyID int64) (s
 	return newStatus, nil
 }
 
+// Get retrieves a policy by ID.
+func (r *PolicyRepo) Get(ctx context.Context, policyID int64) (*PolicyDetails, error) {
+	row := r.db.Reader().QueryRow(ctx, `
+		SELECT
+			p.id,
+			p.name,
+			COALESCE(p.description, ''),
+			p.application_id,
+			COALESCE(av.version, 0) AS active_version,
+			COALESCE(lv.version, 0) AS latest_version,
+			COALESCE(av.policy_text, lv.policy_text, '') AS policy_text
+		FROM policies p
+		LEFT JOIN LATERAL (
+			SELECT version, policy_text FROM policy_versions WHERE policy_id = p.id AND is_active = TRUE ORDER BY version DESC LIMIT 1
+		) av ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT version, policy_text FROM policy_versions WHERE policy_id = p.id ORDER BY version DESC LIMIT 1
+		) lv ON TRUE
+		WHERE p.id = $1
+	`, policyID)
+
+	var out PolicyDetails
+	var appID int64
+	var policyText string
+	if err := row.Scan(&out.ID, &out.Name, &out.Description, &appID, &out.ActiveVersion, &out.LatestVersion, &policyText); err != nil {
+		return nil, fmt.Errorf("get policy: %w", err)
+	}
+	out.ActivePolicyText = policyText
+	return &out, nil
+}
+
 // ApprovePolicyDeletion approves a pending deletion.
 func (r *PolicyRepo) ApprovePolicyDeletion(ctx context.Context, policyID int64, approver string) error {
 	tx, err := r.db.Writer().Begin(ctx)
@@ -734,6 +765,48 @@ type EntityRecord struct {
 	ID         string         `json:"id"`
 	Attributes map[string]any `json:"attributes,omitempty"`
 	Parents    []ParentRef    `json:"parents,omitempty"`
+}
+
+// Entity is a simple entity representation for simulation.
+type Entity struct {
+	Type       string          `json:"type"`
+	EntityID   string          `json:"entity_id"`
+	Attributes map[string]any  `json:"attributes,omitempty"`
+	ParentType *string         `json:"parent_type,omitempty"`
+	ParentID   *string         `json:"parent_id,omitempty"`
+}
+
+// List returns all entities for an application as Entity slice.
+func (r *EntityRepo) List(ctx context.Context, applicationID int64) ([]Entity, error) {
+	rows, err := r.db.Reader().Query(ctx, `
+		SELECT e.entity_type, e.entity_id, e.attributes, ep.parent_type, ep.parent_id
+		FROM entities e
+		LEFT JOIN entity_parents ep ON ep.child_entity_id = e.id
+		WHERE e.application_id = $1
+	`, applicationID)
+	if err != nil {
+		return nil, fmt.Errorf("list entities: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Entity
+	for rows.Next() {
+		var e Entity
+		var attrsJSON []byte
+		if err := rows.Scan(&e.Type, &e.EntityID, &attrsJSON, &e.ParentType, &e.ParentID); err != nil {
+			return nil, fmt.Errorf("scan entity: %w", err)
+		}
+		if len(attrsJSON) > 0 {
+			if err := json.Unmarshal(attrsJSON, &e.Attributes); err != nil {
+				e.Attributes = nil
+			}
+		}
+		out = append(out, e)
+	}
+	if rows.Err() != nil {
+		return nil, fmt.Errorf("iterate entities: %w", rows.Err())
+	}
+	return out, nil
 }
 
 // SchemaRepo manages Cedar schema records per application.
