@@ -6,6 +6,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -92,7 +94,6 @@ func main() {
 	// Start instance registry heartbeat (after router sets the status function)
 	if instanceRegistry != nil {
 		instanceRegistry.Start(ctx)
-		defer instanceRegistry.Stop(context.Background())
 	}
 
 	srv := &http.Server{
@@ -104,8 +105,60 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	log.Printf("server starting on %s", cfg.Addr())
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("server failed: %v", err)
+	// Set up graceful shutdown handler
+	shutdownChan := make(chan os.Signal, 1)
+	signal.Notify(shutdownChan, syscall.SIGTERM, syscall.SIGINT)
+
+	// Start server in goroutine
+	go func() {
+		log.Printf("server starting on %s", cfg.Addr())
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("server failed: %v", err)
+		}
+	}()
+
+	// Wait for shutdown signal
+	sig := <-shutdownChan
+	log.Printf("received signal %v, initiating graceful shutdown...", sig)
+
+	// Create shutdown context with timeout
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
+
+	// Step 1: Mark this instance as offline/suspended so load balancer stops routing to it
+	if instanceRegistry != nil {
+		instanceID := instanceRegistry.GetInstanceID()
+		log.Printf("marking instance %s as offline...", instanceID)
+
+		// Suspend the backend in the database so it's removed from live-backends immediately
+		if backendInstanceRepo != nil {
+			_, err := backendInstanceRepo.Suspend(shutdownCtx, instanceID, "graceful_shutdown")
+			if err != nil {
+				log.Printf("warning: failed to suspend instance: %v", err)
+			} else {
+				log.Printf("instance marked as suspended")
+			}
+		}
+
+		// Stop the heartbeat to prevent re-registration
+		instanceRegistry.Stop(shutdownCtx)
 	}
+
+	// Step 2: Wait briefly for load balancer to pick up the change
+	// This gives Nginx time to detect the backend is offline (check interval is typically 5-10s)
+	drainDuration := 5 * time.Second
+	log.Printf("waiting %v for load balancer to drain connections...", drainDuration)
+	time.Sleep(drainDuration)
+
+	// Step 3: Gracefully shutdown HTTP server (waits for active requests to complete)
+	log.Printf("shutting down HTTP server...")
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("HTTP server shutdown error: %v", err)
+	}
+
+	// Step 4: Stop gRPC server
+	log.Printf("shutting down gRPC server...")
+	grpcServer.GracefulStop()
+
+	log.Printf("graceful shutdown complete")
 }

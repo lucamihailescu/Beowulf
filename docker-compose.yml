@@ -28,7 +28,8 @@ services:
     container_name: cedar-load-balancer
     environment:
       # How often to check for backend changes (seconds)
-      BACKEND_CHECK_INTERVAL: ${BACKEND_CHECK_INTERVAL:-10}
+      # Reduced to 5s for faster detection of backend failures
+      BACKEND_CHECK_INTERVAL: ${BACKEND_CHECK_INTERVAL:-5}
       # How long to wait for backend on startup (seconds)
       STARTUP_WAIT: ${STARTUP_WAIT:-30}
     ports:

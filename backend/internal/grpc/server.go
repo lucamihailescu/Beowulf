@@ -19,6 +19,7 @@ type Server struct {
 	authzv1.UnimplementedAuthorizationServiceServer
 	authzService *authz.Service
 	port         string
+	grpcServer   *grpc.Server
 }
 
 func NewServer(cfg config.Config, service *authz.Service) *Server {
@@ -35,16 +36,23 @@ func (s *Server) Start() error {
 		return fmt.Errorf("failed to listen: %v", err)
 	}
 
-	grpcServer := grpc.NewServer()
-	authzv1.RegisterAuthorizationServiceServer(grpcServer, s)
+	s.grpcServer = grpc.NewServer()
+	authzv1.RegisterAuthorizationServiceServer(s.grpcServer, s)
 
 	// Enable reflection for tools like grpcurl
-	reflection.Register(grpcServer)
+	reflection.Register(s.grpcServer)
 
 	log.Printf("gRPC server listening on :%s", s.port)
 	// Run in a goroutine if blocking, but Start() is usually called blocking.
 	// The caller (main) should handle concurrency if needed.
-	return grpcServer.Serve(lis)
+	return s.grpcServer.Serve(lis)
+}
+
+// GracefulStop gracefully stops the gRPC server
+func (s *Server) GracefulStop() {
+	if s.grpcServer != nil {
+		s.grpcServer.GracefulStop()
+	}
 }
 
 func (s *Server) Check(ctx context.Context, req *authzv1.CheckRequest) (*authzv1.CheckResponse, error) {

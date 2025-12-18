@@ -192,6 +192,10 @@ export default function ClusterManagement() {
   const approvedInstances = instances.filter((i) => i.status === "approved");
   const suspendedInstances = instances.filter((i) => i.status === "suspended");
   const rejectedInstances = instances.filter((i) => i.status === "rejected");
+  
+  // Count active backends (approved and not stale)
+  const activeBackends = approvedInstances.filter((i) => !isStale(i.last_heartbeat));
+  const isLastActiveBackend = activeBackends.length === 1;
 
   const columns = [
     {
@@ -280,13 +284,31 @@ export default function ClusterManagement() {
         }
 
         if (record.status === "approved") {
+          const isThisLastActive = isLastActiveBackend && !isStale(record.last_heartbeat);
+          const lastActiveWarning = (
+            <span style={{ color: "#ff4d4f", fontWeight: 500 }}>
+              ⚠️ This is the last active backend! No nodes will be available to service requests.
+            </span>
+          );
+          
           return (
             <Space>
               <Popconfirm
-                title="Suspend Backend"
-                description="This will stop the backend from receiving traffic. You can resume it later."
+                title={isThisLastActive ? "⚠️ Warning: Last Active Backend" : "Suspend Backend"}
+                description={
+                  isThisLastActive ? (
+                    <div>
+                      {lastActiveWarning}
+                      <br /><br />
+                      This will stop the backend from receiving traffic. You can resume it later.
+                    </div>
+                  ) : (
+                    "This will stop the backend from receiving traffic. You can resume it later."
+                  )
+                }
                 onConfirm={() => handleSuspend(record)}
-                okText="Suspend"
+                okText="Suspend Anyway"
+                okType={isThisLastActive ? "danger" : "primary"}
               >
                 <Button
                   size="small"
@@ -297,10 +319,20 @@ export default function ClusterManagement() {
                 </Button>
               </Popconfirm>
               <Popconfirm
-                title="Remove Backend"
-                description="Are you sure you want to remove this backend from the cluster?"
+                title={isThisLastActive ? "⚠️ Warning: Last Active Backend" : "Remove Backend"}
+                description={
+                  isThisLastActive ? (
+                    <div>
+                      {lastActiveWarning}
+                      <br /><br />
+                      Are you sure you want to remove this backend from the cluster?
+                    </div>
+                  ) : (
+                    "Are you sure you want to remove this backend from the cluster?"
+                  )
+                }
                 onConfirm={() => handleDelete(record)}
-                okText="Remove"
+                okText={isThisLastActive ? "Remove Anyway" : "Remove"}
                 okType="danger"
               >
                 <Button
