@@ -334,6 +334,12 @@ func (a *API) handleDeleteBackendInstance(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Also clean up from Redis to prevent the instance from appearing in cluster status
+	if a.redisClient != nil {
+		redisKey := "cedar:instance:" + instanceID
+		_ = a.redisClient.Del(ctx, redisKey).Err()
+	}
+
 	// Audit log
 	if a.audits != nil {
 		_ = a.audits.Log(ctx, nil, deletedBy, "backend.delete", instanceID, "", nil)

@@ -89,12 +89,32 @@ func main() {
 		}
 	}()
 
-	r := httpserver.NewRouter(cfg, authzSvc, appRepo, policyRepo, entityRepo, schemaRepo, auditRepo, namespaceRepo, settingsRepo, backendAuthRepo, backendInstanceRepo, cache, cache, db, instanceRegistry, simSvc)
+	r := httpserver.NewRouter(cfg, authzSvc, appRepo, policyRepo, entityRepo, schemaRepo, auditRepo, namespaceRepo, settingsRepo, backendAuthRepo, backendInstanceRepo, cache, cache, db, instanceRegistry, simSvc, redisClient)
 
 	// Start instance registry heartbeat (after router sets the status function)
 	if instanceRegistry != nil {
 		instanceRegistry.Start(ctx)
 	}
+
+	// Start periodic stale backend cleanup (suspends backends with no heartbeat for 5 minutes)
+	staleCleanupCtx, staleCleanupCancel := context.WithCancel(ctx)
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-staleCleanupCtx.Done():
+				return
+			case <-ticker.C:
+				suspended, err := backendInstanceRepo.SuspendStale(staleCleanupCtx, 5*time.Minute)
+				if err != nil {
+					log.Printf("stale backend cleanup error: %v", err)
+				} else if suspended > 0 {
+					log.Printf("suspended %d stale backend(s) with no heartbeat for 5+ minutes", suspended)
+				}
+			}
+		}
+	}()
 
 	srv := &http.Server{
 		Addr:              cfg.Addr(),
@@ -120,6 +140,9 @@ func main() {
 	// Wait for shutdown signal
 	sig := <-shutdownChan
 	log.Printf("received signal %v, initiating graceful shutdown...", sig)
+
+	// Stop the stale backend cleanup goroutine
+	staleCleanupCancel()
 
 	// Create shutdown context with timeout
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)

@@ -817,3 +817,18 @@ func (r *BackendInstanceRepo) CleanupStale(ctx context.Context, staleAfter time.
 	return int(result.RowsAffected()), nil
 }
 
+// SuspendStale suspends approved backends that haven't sent a heartbeat in the given duration.
+// Unlike CleanupStale, this doesn't delete them - they can be resumed if they start sending heartbeats again.
+func (r *BackendInstanceRepo) SuspendStale(ctx context.Context, staleAfter time.Duration) (int, error) {
+	query := `
+		UPDATE backend_instances
+		SET status = $1, updated_at = NOW()
+		WHERE status = 'approved' AND last_heartbeat < $2
+	`
+	result, err := r.pool.Exec(ctx, query, BackendStatusSuspended, time.Now().Add(-staleAfter))
+	if err != nil {
+		return 0, fmt.Errorf("failed to suspend stale instances: %w", err)
+	}
+	return int(result.RowsAffected()), nil
+}
+

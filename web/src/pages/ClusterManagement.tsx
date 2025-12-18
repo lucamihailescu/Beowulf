@@ -146,13 +146,15 @@ export default function ClusterManagement() {
     }
   };
 
-  const getStatusTag = (status: BackendInstanceStatus) => {
+  const getStatusTag = (status: BackendInstanceStatus, instance?: BackendInstance) => {
     switch (status) {
       case "pending":
         return (
-          <Tag color="gold" icon={<ClockCircleOutlined />}>
-            Pending Approval
-          </Tag>
+          <Tooltip title="This backend is waiting for admin approval before it can join the cluster">
+            <Tag color="gold" icon={<ClockCircleOutlined />}>
+              Pending Approval
+            </Tag>
+          </Tooltip>
         );
       case "approved":
         return (
@@ -167,10 +169,21 @@ export default function ClusterManagement() {
           </Tag>
         );
       case "suspended":
+        if (instance && isSuspendedDueToMissedHeartbeat(instance)) {
+          return (
+            <Tooltip title="This backend was automatically suspended because it stopped sending heartbeats for 5+ minutes. It may have crashed or been shut down.">
+              <Tag color="red" icon={<ExclamationCircleOutlined />}>
+                Suspended (No Heartbeat)
+              </Tag>
+            </Tooltip>
+          );
+        }
         return (
-          <Tag color="orange" icon={<PauseCircleOutlined />}>
-            Suspended
-          </Tag>
+          <Tooltip title="This backend was manually suspended or suspended during graceful shutdown">
+            <Tag color="orange" icon={<PauseCircleOutlined />}>
+              Suspended
+            </Tag>
+          </Tooltip>
         );
       default:
         return <Tag>{status}</Tag>;
@@ -183,15 +196,27 @@ export default function ClusterManagement() {
   };
 
   const isStale = (lastHeartbeat?: string) => {
-    if (!lastHeartbeat) return false;
+    if (!lastHeartbeat) return true;
     const diff = Date.now() - new Date(lastHeartbeat).getTime();
     return diff > 60000; // More than 1 minute
+  };
+
+  // Check if suspended due to missed heartbeats (5+ minutes without heartbeat)
+  const isSuspendedDueToMissedHeartbeat = (instance: BackendInstance) => {
+    if (instance.status !== "suspended") return false;
+    if (!instance.last_heartbeat) return true;
+    const diff = Date.now() - new Date(instance.last_heartbeat).getTime();
+    return diff > 5 * 60 * 1000; // More than 5 minutes
   };
 
   const pendingInstances = instances.filter((i) => i.status === "pending");
   const approvedInstances = instances.filter((i) => i.status === "approved");
   const suspendedInstances = instances.filter((i) => i.status === "suspended");
   const rejectedInstances = instances.filter((i) => i.status === "rejected");
+  
+  // Separate suspended backends by reason
+  const suspendedDueToHeartbeat = suspendedInstances.filter(isSuspendedDueToMissedHeartbeat);
+  const suspendedManually = suspendedInstances.filter((i) => !isSuspendedDueToMissedHeartbeat(i));
   
   // Count active backends (approved and not stale)
   const activeBackends = approvedInstances.filter((i) => !isStale(i.last_heartbeat));
@@ -216,10 +241,15 @@ export default function ClusterManagement() {
       key: "status",
       render: (status: BackendInstanceStatus, record: BackendInstance) => (
         <Space>
-          {getStatusTag(status)}
+          {getStatusTag(status, record)}
           {status === "approved" && isStale(record.last_heartbeat) && (
-            <Tooltip title="No heartbeat in the last minute">
-              <Tag color="warning">Stale</Tag>
+            <Tooltip title="No heartbeat in the last minute - this backend may be unresponsive">
+              <Tag color="warning" icon={<ExclamationCircleOutlined />}>Stale</Tag>
+            </Tooltip>
+          )}
+          {status === "pending" && isStale(record.last_heartbeat) && (
+            <Tooltip title="This backend has not sent a heartbeat in over a minute. It may have crashed or been shut down before approval. Approving it now would have no effect.">
+              <Tag color="error" icon={<ExclamationCircleOutlined />}>Stale</Tag>
             </Tooltip>
           )}
         </Space>
@@ -256,17 +286,42 @@ export default function ClusterManagement() {
         const isLoading = actionLoading === record.instance_id;
 
         if (record.status === "pending") {
+          const isPendingStale = isStale(record.last_heartbeat);
           return (
             <Space>
-              <Button
-                type="primary"
-                size="small"
-                icon={<CheckCircleOutlined />}
-                loading={isLoading}
-                onClick={() => handleApprove(record)}
-              >
-                Approve
-              </Button>
+              {isPendingStale ? (
+                <Popconfirm
+                  title="⚠️ Warning: Stale Backend"
+                  description={
+                    <div style={{ maxWidth: 300 }}>
+                      This backend hasn't sent a heartbeat in over a minute. 
+                      It may have crashed or been shut down. Approving it now will have no effect 
+                      since it's not online to receive the approval.
+                    </div>
+                  }
+                  onConfirm={() => handleApprove(record)}
+                  okText="Approve Anyway"
+                  okType="default"
+                >
+                  <Button
+                    size="small"
+                    icon={<CheckCircleOutlined />}
+                    loading={isLoading}
+                  >
+                    Approve
+                  </Button>
+                </Popconfirm>
+              ) : (
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<CheckCircleOutlined />}
+                  loading={isLoading}
+                  onClick={() => handleApprove(record)}
+                >
+                  Approve
+                </Button>
+              )}
               <Button
                 danger
                 size="small"
@@ -279,6 +334,24 @@ export default function ClusterManagement() {
               >
                 Reject
               </Button>
+              {isPendingStale && (
+                <Popconfirm
+                  title="Remove Stale Backend"
+                  description="This backend is stale and can be safely removed."
+                  onConfirm={() => handleDelete(record)}
+                  okText="Remove"
+                  okType="danger"
+                >
+                  <Button
+                    danger
+                    size="small"
+                    icon={<DeleteOutlined />}
+                    loading={isLoading}
+                  >
+                    Remove
+                  </Button>
+                </Popconfirm>
+              )}
             </Space>
           );
         }
@@ -448,10 +521,18 @@ export default function ClusterManagement() {
         <Col xs={12} sm={8} lg={4}>
           <Card>
             <Statistic
-              title="Suspended"
+              title={
+                <Tooltip title={suspendedDueToHeartbeat.length > 0 
+                  ? `${suspendedDueToHeartbeat.length} suspended due to missed heartbeats, ${suspendedManually.length} manually suspended`
+                  : "Backends that are suspended and not receiving traffic"
+                }>
+                  <span>Suspended</span>
+                </Tooltip>
+              }
               value={counts["suspended"] || 0}
-              valueStyle={{ color: counts["suspended"] ? "#fa8c16" : undefined }}
-              prefix={<PauseCircleOutlined />}
+              valueStyle={{ color: suspendedDueToHeartbeat.length > 0 ? "#ff4d4f" : (counts["suspended"] ? "#fa8c16" : undefined) }}
+              prefix={suspendedDueToHeartbeat.length > 0 ? <ExclamationCircleOutlined /> : <PauseCircleOutlined />}
+              suffix={suspendedDueToHeartbeat.length > 0 ? <Text type="danger" style={{ fontSize: 12 }}>({suspendedDueToHeartbeat.length} stale)</Text> : null}
             />
           </Card>
         </Col>
@@ -491,6 +572,23 @@ export default function ClusterManagement() {
         </Space>
       </Card>
 
+      {/* Suspended due to heartbeat Alert */}
+      {suspendedDueToHeartbeat.length > 0 && (
+        <Alert
+          message={`${suspendedDueToHeartbeat.length} backend${suspendedDueToHeartbeat.length > 1 ? "s" : ""} suspended due to missed heartbeats`}
+          description={
+            <span>
+              These backends stopped sending heartbeats for 5+ minutes and were automatically suspended. 
+              They may have crashed, been shut down, or lost network connectivity. 
+              You can resume them once they start sending heartbeats again, or remove them from the cluster.
+            </span>
+          }
+          type="error"
+          showIcon
+          icon={<ExclamationCircleOutlined />}
+        />
+      )}
+
       {/* Pending Backends Alert */}
       {pendingInstances.length > 0 && (
         <Alert
@@ -498,7 +596,7 @@ export default function ClusterManagement() {
           description="Review and approve pending backends to allow them to join the cluster."
           type="warning"
           showIcon
-          icon={<ExclamationCircleOutlined />}
+          icon={<ClockCircleOutlined />}
         />
       )}
 

@@ -23,8 +23,11 @@ import {
   LockOutlined,
   UnlockOutlined,
   CloudOutlined,
+  CloudServerOutlined,
 } from "@ant-design/icons";
 import { EntraPicker, EntraSelection } from "./EntraPicker";
+import { ADPicker, ADSelection } from "./ADPicker";
+import { api, IdentityProvider } from "../api";
 
 type PolicyTemplate = {
   id: string;
@@ -40,7 +43,8 @@ type TemplateVariable = {
   key: string;
   label: string;
   description: string;
-  type: "text" | "select" | "multi-select" | "entra-user" | "entra-group" | "entra-both";
+  // identity-* types will use either EntraPicker or ADPicker based on the active identity provider
+  type: "text" | "select" | "multi-select" | "entra-user" | "entra-group" | "entra-both" | "identity-user" | "identity-group" | "identity-both";
   placeholder?: string;
   options?: { value: string; label: string }[];
   required?: boolean;
@@ -702,6 +706,14 @@ export default function PolicyTemplateWizard({
   const [policyDescription, setPolicyDescription] = useState("");
   const [activate, setActivate] = useState(true);
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
+  const [identityProvider, setIdentityProvider] = useState<IdentityProvider | null>(null);
+
+  // Fetch identity provider on mount
+  useEffect(() => {
+    api.getIdentityProvider()
+      .then(setIdentityProvider)
+      .catch(() => setIdentityProvider({ provider: "none" }));
+  }, []);
 
   // Reset state when modal closes
   useEffect(() => {
@@ -846,8 +858,13 @@ export default function PolicyTemplateWizard({
               <Space style={{ marginBottom: 4 }}>
                 <Typography.Text strong>{variable.label}</Typography.Text>
                 {variable.required && <Tag color="red">Required</Tag>}
-                {(variable.type === "entra-user" || variable.type === "entra-group" || variable.type === "entra-both") && (
-                  <Tag color="cyan" icon={<CloudOutlined />}>Entra ID</Tag>
+                {(variable.type === "entra-user" || variable.type === "entra-group" || variable.type === "entra-both" ||
+                  variable.type === "identity-user" || variable.type === "identity-group" || variable.type === "identity-both") && (
+                  identityProvider?.provider === "ad" ? (
+                    <Tag color="blue" icon={<CloudServerOutlined />}>Active Directory</Tag>
+                  ) : (
+                    <Tag color="cyan" icon={<CloudOutlined />}>Entra ID</Tag>
+                  )
                 )}
               </Space>
               <Typography.Paragraph type="secondary" style={{ margin: "4px 0 8px" }}>
@@ -871,53 +888,102 @@ export default function PolicyTemplateWizard({
                   options={variable.options}
                 />
               )}
-              {(variable.type === "entra-user" || variable.type === "entra-group" || variable.type === "entra-both") && (
+              {/* Identity picker - uses Entra or AD based on configured provider */}
+              {(variable.type === "entra-user" || variable.type === "entra-group" || variable.type === "entra-both" ||
+                variable.type === "identity-user" || variable.type === "identity-group" || variable.type === "identity-both") && (
                 <Space direction="vertical" style={{ width: "100%" }}>
-                  <EntraPicker
-                    mode="single"
-                    allowedTypes={
-                      variable.type === "entra-user" ? ["User"] :
-                      variable.type === "entra-group" ? ["Group"] :
-                      ["User", "Group"]
-                    }
-                    value={
-                      variableValues[variable.key]
-                        ? [{
-                            type: (variableValues[`${variable.key}_type`] as "User" | "Group") || 
-                                  (variable.type === "entra-user" ? "User" : "Group"),
-                            id: variableValues[variable.key],
-                            displayName: variableValues[`${variable.key}_name`] || variableValues[variable.key],
-                          }]
-                        : []
-                    }
-                    onChange={(selections) => {
-                      if (selections.length > 0) {
-                        const newValues: Record<string, string> = {
-                          ...variableValues,
-                          [variable.key]: selections[0].id,
-                          [`${variable.key}_name`]: selections[0].displayName,
-                        };
-                        // For entra-both, also store the type and auto-set principalType if it exists
-                        if (variable.type === "entra-both") {
-                          newValues[`${variable.key}_type`] = selections[0].type;
-                          // Auto-set the corresponding principalType field if this variable key ends with "Id"
-                          const typeKey = variable.key.replace(/Id$/, "Type");
-                          if (selectedTemplate?.variables.some(v => v.key === typeKey)) {
-                            newValues[typeKey] = selections[0].type;
-                          }
-                        }
-                        setVariableValues(newValues);
-                      } else {
-                        setVariableValues({
-                          ...variableValues,
-                          [variable.key]: "",
-                          [`${variable.key}_name`]: "",
-                          [`${variable.key}_type`]: "",
-                        });
+                  {/* Show Entra picker when Entra is configured or for entra-* types */}
+                  {(identityProvider?.provider === "entra" || variable.type.startsWith("entra-")) && identityProvider?.provider !== "ad" && (
+                    <EntraPicker
+                      mode="single"
+                      allowedTypes={
+                        variable.type === "entra-user" || variable.type === "identity-user" ? ["User"] :
+                        variable.type === "entra-group" || variable.type === "identity-group" ? ["Group"] :
+                        ["User", "Group"]
                       }
-                    }}
-                    placeholder={`Search Entra for ${variable.type === "entra-user" ? "users" : variable.type === "entra-group" ? "groups" : "users/groups"}...`}
-                  />
+                      value={
+                        variableValues[variable.key]
+                          ? [{
+                              type: (variableValues[`${variable.key}_type`] as "User" | "Group") || 
+                                    (variable.type.includes("user") ? "User" : "Group"),
+                              id: variableValues[variable.key],
+                              displayName: variableValues[`${variable.key}_name`] || variableValues[variable.key],
+                            }]
+                          : []
+                      }
+                      onChange={(selections: EntraSelection[]) => {
+                        if (selections.length > 0) {
+                          const newValues: Record<string, string> = {
+                            ...variableValues,
+                            [variable.key]: selections[0].id,
+                            [`${variable.key}_name`]: selections[0].displayName,
+                          };
+                          if (variable.type.includes("both")) {
+                            newValues[`${variable.key}_type`] = selections[0].type;
+                            const typeKey = variable.key.replace(/Id$/, "Type");
+                            if (selectedTemplate?.variables.some(v => v.key === typeKey)) {
+                              newValues[typeKey] = selections[0].type;
+                            }
+                          }
+                          setVariableValues(newValues);
+                        } else {
+                          setVariableValues({
+                            ...variableValues,
+                            [variable.key]: "",
+                            [`${variable.key}_name`]: "",
+                            [`${variable.key}_type`]: "",
+                          });
+                        }
+                      }}
+                      placeholder={`Search Entra for ${variable.type.includes("user") ? "users" : variable.type.includes("group") ? "groups" : "users/groups"}...`}
+                    />
+                  )}
+                  {/* Show AD picker when AD is configured */}
+                  {identityProvider?.provider === "ad" && (
+                    <ADPicker
+                      mode="single"
+                      allowedTypes={
+                        variable.type === "entra-user" || variable.type === "identity-user" ? ["User"] :
+                        variable.type === "entra-group" || variable.type === "identity-group" ? ["Group"] :
+                        ["User", "Group"]
+                      }
+                      value={
+                        variableValues[variable.key]
+                          ? [{
+                              type: (variableValues[`${variable.key}_type`] as "User" | "Group") || 
+                                    (variable.type.includes("user") ? "User" : "Group"),
+                              id: variableValues[variable.key],
+                              displayName: variableValues[`${variable.key}_name`] || variableValues[variable.key],
+                            }]
+                          : []
+                      }
+                      onChange={(selections: ADSelection[]) => {
+                        if (selections.length > 0) {
+                          const newValues: Record<string, string> = {
+                            ...variableValues,
+                            [variable.key]: selections[0].id,
+                            [`${variable.key}_name`]: selections[0].displayName,
+                          };
+                          if (variable.type.includes("both")) {
+                            newValues[`${variable.key}_type`] = selections[0].type;
+                            const typeKey = variable.key.replace(/Id$/, "Type");
+                            if (selectedTemplate?.variables.some(v => v.key === typeKey)) {
+                              newValues[typeKey] = selections[0].type;
+                            }
+                          }
+                          setVariableValues(newValues);
+                        } else {
+                          setVariableValues({
+                            ...variableValues,
+                            [variable.key]: "",
+                            [`${variable.key}_name`]: "",
+                            [`${variable.key}_type`]: "",
+                          });
+                        }
+                      }}
+                      placeholder={`Search AD for ${variable.type.includes("user") ? "users" : variable.type.includes("group") ? "groups" : "users/groups"}...`}
+                    />
+                  )}
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     Or enter manually:
                   </Typography.Text>

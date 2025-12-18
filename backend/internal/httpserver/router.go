@@ -21,8 +21,11 @@ import (
 	"cedar/internal/authz"
 	"cedar/internal/config"
 	"cedar/internal/entra"
+	"cedar/internal/ldap"
 	"cedar/internal/simulation"
 	"cedar/internal/storage"
+
+	"github.com/redis/go-redis/v9"
 )
 
 type CacheInvalidator interface {
@@ -184,7 +187,9 @@ type API struct {
 	cacheStore          *storage.Cache // For health checks
 	sseBroker           *SSEBroker
 	entraClient         *entra.Client
+	ldapClient          *ldap.Client
 	db                  DBPinger // For health checks
+	redisClient         *redis.Client // For instance registry cleanup
 	instanceRegistry    *storage.InstanceRegistry
 	instanceID          string
 	startedAt           time.Time
@@ -213,7 +218,7 @@ type DBPinger interface {
 // @securityDefinitions.apikey BearerAuth
 // @in header
 // @name Authorization
-func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.ApplicationRepo, policies *storage.PolicyRepo, entities *storage.EntityRepo, schemas *storage.SchemaRepo, audits *storage.AuditRepo, namespaces *storage.NamespaceRepo, settings *storage.SettingsRepo, backendAuthRepo *storage.BackendAuthRepo, backendInstanceRepo *storage.BackendInstanceRepo, cache CacheInvalidator, cacheStore *storage.Cache, db DBPinger, instanceRegistry *storage.InstanceRegistry, simulationSvc *simulation.Service) http.Handler {
+func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.ApplicationRepo, policies *storage.PolicyRepo, entities *storage.EntityRepo, schemas *storage.SchemaRepo, audits *storage.AuditRepo, namespaces *storage.NamespaceRepo, settings *storage.SettingsRepo, backendAuthRepo *storage.BackendAuthRepo, backendInstanceRepo *storage.BackendInstanceRepo, cache CacheInvalidator, cacheStore *storage.Cache, db DBPinger, instanceRegistry *storage.InstanceRegistry, simulationSvc *simulation.Service, redisClient *redis.Client) http.Handler {
 	// Create SSE broker for real-time event streaming
 	sseBroker := NewSSEBroker()
 
@@ -229,6 +234,16 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 	// Fall back to environment config if no database settings
 	if entraClient == nil || !entraClient.IsConfigured() {
 		entraClient = entra.NewClient(cfg.AzureTenantID, cfg.AzureClientID, cfg.AzureClientSecret)
+	}
+
+	// Create LDAP client for Active Directory integration
+	var ldapClient *ldap.Client
+	if settings != nil {
+		ctx := context.Background()
+		if adConfig, err := settings.GetADConfig(ctx); err == nil && adConfig.Configured {
+			ldapConfig := adConfigToLDAPConfig(adConfig)
+			ldapClient = ldap.NewClient(ldapConfig, redisClient)
+		}
 	}
 
 	// Get instance ID from registry if available, otherwise generate one
@@ -258,7 +273,9 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 		cacheStore:          cacheStore,
 		sseBroker:           sseBroker,
 		entraClient:         entraClient,
+		ldapClient:          ldapClient,
 		db:                  db,
+		redisClient:         redisClient,
 		instanceRegistry:    instanceRegistry,
 		instanceID:          instanceID,
 		startedAt:           startedAt,
@@ -340,12 +357,28 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 		r.Get("/groups/{id}", api.handleEntraGetGroup)
 	})
 
+	// Active Directory (LDAP) integration for user/group lookup
+	r.Route("/v1/ad", func(r chi.Router) {
+		r.Get("/status", api.handleGetADStatus)
+		r.Get("/users", api.handleSearchADUsers)
+		r.Get("/groups", api.handleSearchADGroups)
+	})
+
+	// Identity provider status (returns which provider is active)
+	r.Get("/v1/identity-provider", api.handleGetIdentityProvider)
+
 	// Settings management
 	r.Route("/v1/settings", func(r chi.Router) {
 		r.Get("/entra", api.handleGetEntraSettings)
 		r.Post("/entra", api.handleSaveEntraSettings)
 		r.Post("/entra/test", api.handleTestEntraConnection)
 		r.Delete("/entra", api.handleDeleteEntraSettings)
+
+		// Active Directory settings
+		r.Get("/ad", api.handleGetADConfig)
+		r.Put("/ad", api.handleUpdateADConfig)
+		r.Post("/ad/test", api.handleTestADConnection)
+		r.Delete("/ad", api.handleDeleteADConfig)
 
 		// Backend authentication settings
 		r.Get("/backend-auth", api.handleGetBackendAuthConfig)
@@ -375,6 +408,9 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 
 	// Public auth config endpoint (no auth required for this one)
 	r.Get("/v1/auth/config", api.handleGetAuthConfig)
+
+	// LDAP authentication endpoint
+	r.Post("/v1/auth/ldap", api.handleLDAPAuth)
 
 	r.Route("/v1/audit", func(r chi.Router) {
 		r.Get("/", api.handleListAuditLogs)

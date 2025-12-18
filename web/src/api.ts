@@ -208,6 +208,115 @@ export type EntraStatus = {
   tenant_id: string;
 };
 
+// Active Directory (LDAP) types
+export type ADUser = {
+  dn: string;
+  sAMAccountName: string;
+  userPrincipalName: string;
+  displayName: string;
+  mail: string;
+  givenName?: string;
+  sn?: string;
+  department?: string;
+  title?: string;
+  groups?: string[];
+};
+
+export type ADGroup = {
+  dn: string;
+  cn: string;
+  displayName?: string;
+  description?: string;
+  mail?: string;
+};
+
+export type ADSearchUsersResult = {
+  users: ADUser[];
+  total_count: number;
+};
+
+export type ADSearchGroupsResult = {
+  groups: ADGroup[];
+  total_count: number;
+};
+
+export type ADStatus = {
+  configured: boolean;
+  enabled: boolean;
+  auth_method: string;
+  server?: string;
+};
+
+export type ADConfig = {
+  enabled: boolean;
+  server: string;
+  base_dn: string;
+  bind_dn: string;
+  has_bind_password: boolean;
+  user_filter: string;
+  group_filter: string;
+  user_search_filter: string;
+  group_membership_attr: string;
+  use_tls: boolean;
+  insecure_skip_verify: boolean;
+  kerberos_enabled: boolean;
+  kerberos_keytab?: string;
+  kerberos_service?: string;
+  kerberos_realm?: string;
+  group_cache_ttl: string;
+  configured: boolean;
+};
+
+export type ADConfigRequest = {
+  enabled: boolean;
+  server: string;
+  base_dn: string;
+  bind_dn: string;
+  bind_password?: string;
+  user_filter?: string;
+  group_filter?: string;
+  user_search_filter?: string;
+  group_membership_attr?: string;
+  use_tls?: boolean;
+  insecure_skip_verify?: boolean;
+  kerberos_enabled?: boolean;
+  kerberos_keytab?: string;
+  kerberos_service?: string;
+  kerberos_realm?: string;
+  group_cache_ttl?: string;
+};
+
+export type ADTestResult = {
+  success: boolean;
+  message?: string;
+  error?: string;
+};
+
+export type IdentityProvider = {
+  provider: "ad" | "entra" | "none";
+  auth_method?: string;
+  server?: string;
+  tenant_id?: string;
+  client_id?: string;
+};
+
+export type LDAPAuthRequest = {
+  username: string;
+  password: string;
+};
+
+export type LDAPAuthResponse = {
+  token: string;
+  expires_at: number;
+  user: {
+    id: string;
+    username: string;
+    display_name: string;
+    email: string;
+    groups: string[];
+  };
+};
+
 // Settings types
 export type EntraSettings = {
   tenant_id: string;
@@ -658,6 +767,42 @@ export const api = {
     },
   },
 
+  // Active Directory (LDAP) endpoints
+  ad: {
+    getStatus(): Promise<ADStatus> {
+      return request<ADStatus>("/v1/ad/status");
+    },
+
+    searchUsers(query?: string, limit?: number): Promise<ADSearchUsersResult> {
+      const params = new URLSearchParams();
+      if (query) params.set("q", query);
+      if (limit) params.set("limit", String(limit));
+      const qs = params.toString();
+      return request<ADSearchUsersResult>(`/v1/ad/users${qs ? `?${qs}` : ""}`);
+    },
+
+    searchGroups(query?: string, limit?: number): Promise<ADSearchGroupsResult> {
+      const params = new URLSearchParams();
+      if (query) params.set("q", query);
+      if (limit) params.set("limit", String(limit));
+      const qs = params.toString();
+      return request<ADSearchGroupsResult>(`/v1/ad/groups${qs ? `?${qs}` : ""}`);
+    },
+  },
+
+  // Identity Provider status
+  getIdentityProvider(): Promise<IdentityProvider> {
+    return request<IdentityProvider>("/v1/identity-provider");
+  },
+
+  // LDAP authentication
+  ldapAuth(credentials: LDAPAuthRequest): Promise<LDAPAuthResponse> {
+    return request<LDAPAuthResponse>("/v1/auth/ldap", {
+      method: "POST",
+      body: JSON.stringify(credentials),
+    });
+  },
+
   // Settings endpoints
   settings: {
     getEntra(): Promise<EntraSettings> {
@@ -680,6 +825,31 @@ export const api = {
 
     deleteEntra(): Promise<{ status: string }> {
       return request<{ status: string }>("/v1/settings/entra", {
+        method: "DELETE",
+      });
+    },
+
+    // Active Directory settings
+    getAD(): Promise<ADConfig> {
+      return request<ADConfig>("/v1/settings/ad");
+    },
+
+    saveAD(config: ADConfigRequest): Promise<ADConfig> {
+      return request<ADConfig>("/v1/settings/ad", {
+        method: "PUT",
+        body: JSON.stringify(config),
+      });
+    },
+
+    testAD(config?: ADConfigRequest): Promise<ADTestResult> {
+      return request<ADTestResult>("/v1/settings/ad/test", {
+        method: "POST",
+        body: config ? JSON.stringify(config) : "{}",
+      });
+    },
+
+    deleteAD(): Promise<{ status: string }> {
+      return request<{ status: string }>("/v1/settings/ad", {
         method: "DELETE",
       });
     },

@@ -26,6 +26,7 @@ import ClusterManagement from "./pages/ClusterManagement";
 import { AuthProvider, useAuth, isAuthEnabled } from "./auth";
 import { useTheme } from "./ThemeProvider";
 import { SSEProvider } from "./contexts/SSEContext";
+import LDAPLoginForm from "./components/LDAPLoginForm";
 
 // Theme toggle component
 function ThemeToggle() {
@@ -49,7 +50,7 @@ function ThemeToggle() {
 
 // Login page component
 function LoginPage() {
-  const { login, isLoading } = useAuth();
+  const { login, isLoading, authMode, showLoginForm } = useAuth();
   const { token } = theme.useToken();
 
   if (isLoading) {
@@ -58,6 +59,11 @@ function LoginPage() {
         <Spin size="large" />
       </div>
     );
+  }
+
+  // For LDAP auth, show the LDAP login form
+  if (authMode === 'ldap' && showLoginForm) {
+    return <LDAPLoginForm />;
   }
 
   return (
@@ -74,7 +80,7 @@ function LoginPage() {
         subTitle="Please sign in to continue"
         extra={
           <Space direction="vertical" size={16}>
-            <Button type="primary" icon={<LoginOutlined />} onClick={login} size="large">
+            <Button type="primary" icon={<LoginOutlined />} onClick={() => login()} size="large">
               Sign In
             </Button>
             <ThemeToggle />

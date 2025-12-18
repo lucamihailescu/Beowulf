@@ -41,7 +41,7 @@ func NewSettingsRepo(db *DB) *SettingsRepo {
 		// Default key for development - 32 bytes for AES-256
 		key = "cedar-default-encryption-key-32"
 	}
-	
+
 	// Ensure key is 32 bytes for AES-256
 	keyBytes := []byte(key)
 	if len(keyBytes) < 32 {
@@ -52,7 +52,7 @@ func NewSettingsRepo(db *DB) *SettingsRepo {
 	} else if len(keyBytes) > 32 {
 		keyBytes = keyBytes[:32]
 	}
-	
+
 	return &SettingsRepo{
 		db:            db,
 		encryptionKey: keyBytes,
@@ -66,7 +66,7 @@ func (r *SettingsRepo) Get(ctx context.Context, key string) (*Setting, error) {
 		FROM settings
 		WHERE key = $1
 	`
-	
+
 	var s Setting
 	err := r.db.Reader().QueryRow(ctx, query, key).Scan(
 		&s.Key, &s.Value, &s.Encrypted, &s.Description, &s.UpdatedBy, &s.CreatedAt, &s.UpdatedAt,
@@ -77,7 +77,7 @@ func (r *SettingsRepo) Get(ctx context.Context, key string) (*Setting, error) {
 		}
 		return nil, fmt.Errorf("get setting: %w", err)
 	}
-	
+
 	// Decrypt if encrypted
 	if s.Encrypted {
 		decrypted, err := r.decrypt(s.Value)
@@ -86,7 +86,7 @@ func (r *SettingsRepo) Get(ctx context.Context, key string) (*Setting, error) {
 		}
 		s.Value = decrypted
 	}
-	
+
 	return &s, nil
 }
 
@@ -109,7 +109,7 @@ func (r *SettingsRepo) Set(ctx context.Context, key, value, description, updated
 		}
 		storedValue = encrypted
 	}
-	
+
 	query := `
 		INSERT INTO settings (key, value, encrypted, description, updated_by)
 		VALUES ($1, $2, $3, $4, $5)
@@ -120,12 +120,12 @@ func (r *SettingsRepo) Set(ctx context.Context, key, value, description, updated
 			updated_by = EXCLUDED.updated_by,
 			updated_at = NOW()
 	`
-	
+
 	_, err := r.db.Writer().Exec(ctx, query, key, storedValue, encrypt, description, updatedBy)
 	if err != nil {
 		return fmt.Errorf("set setting: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -146,28 +146,28 @@ func (r *SettingsRepo) List(ctx context.Context) ([]Setting, error) {
 		FROM settings
 		ORDER BY key
 	`
-	
+
 	rows, err := r.db.Reader().Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("list settings: %w", err)
 	}
 	defer rows.Close()
-	
+
 	var settings []Setting
 	for rows.Next() {
 		var s Setting
 		if err := rows.Scan(&s.Key, &s.Value, &s.Encrypted, &s.Description, &s.UpdatedBy, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan setting: %w", err)
 		}
-		
+
 		// Mask encrypted values
 		if s.Encrypted {
 			s.Value = "********"
 		}
-		
+
 		settings = append(settings, s)
 	}
-	
+
 	return settings, rows.Err()
 }
 
@@ -177,17 +177,17 @@ func (r *SettingsRepo) encrypt(plaintext string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
 		return "", err
 	}
-	
+
 	nonce := make([]byte, gcm.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", err
 	}
-	
+
 	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
 	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
@@ -198,28 +198,28 @@ func (r *SettingsRepo) decrypt(ciphertext string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	block, err := aes.NewCipher(r.encryptionKey)
 	if err != nil {
 		return "", err
 	}
-	
+
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
 		return "", err
 	}
-	
+
 	nonceSize := gcm.NonceSize()
 	if len(data) < nonceSize {
 		return "", errors.New("ciphertext too short")
 	}
-	
+
 	nonce, ciphertextBytes := data[:nonceSize], data[nonceSize:]
 	plaintext, err := gcm.Open(nil, nonce, ciphertextBytes, nil)
 	if err != nil {
 		return "", err
 	}
-	
+
 	return string(plaintext), nil
 }
 
@@ -249,7 +249,7 @@ func (r *SettingsRepo) GetEntraConfig(ctx context.Context) (*EntraConfig, error)
 	clientSecret := r.GetValue(ctx, SettingEntraClientSecret)
 	redirectURI := r.GetValue(ctx, SettingEntraRedirectURI)
 	authEnabled := r.GetValue(ctx, SettingEntraAuthEnabled) == "true"
-	
+
 	return &EntraConfig{
 		TenantID:     tenantID,
 		ClientID:     clientID,
@@ -296,3 +296,285 @@ func (r *SettingsRepo) DeleteEntraConfig(ctx context.Context) error {
 	return nil
 }
 
+// Active Directory configuration keys
+const (
+	SettingADEnabled             = "ad.enabled"
+	SettingADServer              = "ad.server"
+	SettingADBaseDN              = "ad.base_dn"
+	SettingADBindDN              = "ad.bind_dn"
+	SettingADBindPassword        = "ad.bind_password"
+	SettingADUserFilter          = "ad.user_filter"
+	SettingADGroupFilter         = "ad.group_filter"
+	SettingADUserSearchFilter    = "ad.user_search_filter"
+	SettingADGroupMembershipAttr = "ad.group_membership_attr"
+	SettingADUseTLS              = "ad.use_tls"
+	SettingADInsecureSkipVerify  = "ad.insecure_skip_verify"
+	SettingADKerberosEnabled     = "ad.kerberos_enabled"
+	SettingADKerberosKeytab      = "ad.kerberos_keytab"
+	SettingADKerberosService     = "ad.kerberos_service"
+	SettingADKerberosRealm       = "ad.kerberos_realm"
+	SettingADGroupCacheTTL       = "ad.group_cache_ttl"
+)
+
+// ADConfig holds Active Directory configuration.
+type ADConfig struct {
+	Enabled             bool   `json:"enabled"`
+	Server              string `json:"server"`
+	BaseDN              string `json:"base_dn"`
+	BindDN              string `json:"bind_dn"`
+	BindPassword        string `json:"bind_password,omitempty"`
+	UserFilter          string `json:"user_filter"`
+	GroupFilter         string `json:"group_filter"`
+	UserSearchFilter    string `json:"user_search_filter"`
+	GroupMembershipAttr string `json:"group_membership_attr"`
+	UseTLS              bool   `json:"use_tls"`
+	InsecureSkipVerify  bool   `json:"insecure_skip_verify"`
+	KerberosEnabled     bool   `json:"kerberos_enabled"`
+	KerberosKeytab      string `json:"kerberos_keytab,omitempty"`
+	KerberosService     string `json:"kerberos_service,omitempty"`
+	KerberosRealm       string `json:"kerberos_realm,omitempty"`
+	GroupCacheTTL       string `json:"group_cache_ttl"`
+	Configured          bool   `json:"configured"`
+}
+
+// ADConfigPublic is ADConfig without sensitive fields (for API responses).
+type ADConfigPublic struct {
+	Enabled             bool   `json:"enabled"`
+	Server              string `json:"server"`
+	BaseDN              string `json:"base_dn"`
+	BindDN              string `json:"bind_dn"`
+	HasBindPassword     bool   `json:"has_bind_password"`
+	UserFilter          string `json:"user_filter"`
+	GroupFilter         string `json:"group_filter"`
+	UserSearchFilter    string `json:"user_search_filter"`
+	GroupMembershipAttr string `json:"group_membership_attr"`
+	UseTLS              bool   `json:"use_tls"`
+	InsecureSkipVerify  bool   `json:"insecure_skip_verify"`
+	KerberosEnabled     bool   `json:"kerberos_enabled"`
+	KerberosKeytab      string `json:"kerberos_keytab,omitempty"`
+	KerberosService     string `json:"kerberos_service,omitempty"`
+	KerberosRealm       string `json:"kerberos_realm,omitempty"`
+	GroupCacheTTL       string `json:"group_cache_ttl"`
+	Configured          bool   `json:"configured"`
+}
+
+// GetADConfig retrieves the Active Directory configuration.
+func (r *SettingsRepo) GetADConfig(ctx context.Context) (*ADConfig, error) {
+	enabled := r.GetValue(ctx, SettingADEnabled) == "true"
+	server := r.GetValue(ctx, SettingADServer)
+	baseDN := r.GetValue(ctx, SettingADBaseDN)
+	bindDN := r.GetValue(ctx, SettingADBindDN)
+	bindPassword := r.GetValue(ctx, SettingADBindPassword)
+	userFilter := r.GetValue(ctx, SettingADUserFilter)
+	groupFilter := r.GetValue(ctx, SettingADGroupFilter)
+	userSearchFilter := r.GetValue(ctx, SettingADUserSearchFilter)
+	groupMembershipAttr := r.GetValue(ctx, SettingADGroupMembershipAttr)
+	useTLS := r.GetValue(ctx, SettingADUseTLS) == "true"
+	insecureSkipVerify := r.GetValue(ctx, SettingADInsecureSkipVerify) == "true"
+	kerberosEnabled := r.GetValue(ctx, SettingADKerberosEnabled) == "true"
+	kerberosKeytab := r.GetValue(ctx, SettingADKerberosKeytab)
+	kerberosService := r.GetValue(ctx, SettingADKerberosService)
+	kerberosRealm := r.GetValue(ctx, SettingADKerberosRealm)
+	groupCacheTTL := r.GetValue(ctx, SettingADGroupCacheTTL)
+
+	// Apply defaults
+	if userFilter == "" {
+		userFilter = "(&(objectClass=user)(|(sAMAccountName=*%s*)(displayName=*%s*)(mail=*%s*)))"
+	}
+	if groupFilter == "" {
+		groupFilter = "(&(objectClass=group)(|(cn=*%s*)(description=*%s*)))"
+	}
+	if userSearchFilter == "" {
+		userSearchFilter = "(&(objectClass=user)(sAMAccountName=%s))"
+	}
+	if groupMembershipAttr == "" {
+		groupMembershipAttr = "memberOf"
+	}
+	if groupCacheTTL == "" {
+		groupCacheTTL = "5m"
+	}
+
+	configured := server != "" && baseDN != "" && bindDN != "" && bindPassword != ""
+
+	return &ADConfig{
+		Enabled:             enabled,
+		Server:              server,
+		BaseDN:              baseDN,
+		BindDN:              bindDN,
+		BindPassword:        bindPassword,
+		UserFilter:          userFilter,
+		GroupFilter:         groupFilter,
+		UserSearchFilter:    userSearchFilter,
+		GroupMembershipAttr: groupMembershipAttr,
+		UseTLS:              useTLS,
+		InsecureSkipVerify:  insecureSkipVerify,
+		KerberosEnabled:     kerberosEnabled,
+		KerberosKeytab:      kerberosKeytab,
+		KerberosService:     kerberosService,
+		KerberosRealm:       kerberosRealm,
+		GroupCacheTTL:       groupCacheTTL,
+		Configured:          configured,
+	}, nil
+}
+
+// GetADConfigPublic retrieves the AD configuration without sensitive fields.
+func (r *SettingsRepo) GetADConfigPublic(ctx context.Context) (*ADConfigPublic, error) {
+	config, err := r.GetADConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ADConfigPublic{
+		Enabled:             config.Enabled,
+		Server:              config.Server,
+		BaseDN:              config.BaseDN,
+		BindDN:              config.BindDN,
+		HasBindPassword:     config.BindPassword != "",
+		UserFilter:          config.UserFilter,
+		GroupFilter:         config.GroupFilter,
+		UserSearchFilter:    config.UserSearchFilter,
+		GroupMembershipAttr: config.GroupMembershipAttr,
+		UseTLS:              config.UseTLS,
+		InsecureSkipVerify:  config.InsecureSkipVerify,
+		KerberosEnabled:     config.KerberosEnabled,
+		KerberosKeytab:      config.KerberosKeytab,
+		KerberosService:     config.KerberosService,
+		KerberosRealm:       config.KerberosRealm,
+		GroupCacheTTL:       config.GroupCacheTTL,
+		Configured:          config.Configured,
+	}, nil
+}
+
+// SetADConfig saves the Active Directory configuration.
+func (r *SettingsRepo) SetADConfig(ctx context.Context, config *ADConfig, updatedBy string) error {
+	enabledStr := "false"
+	if config.Enabled {
+		enabledStr = "true"
+	}
+	if err := r.Set(ctx, SettingADEnabled, enabledStr, "Enable Active Directory authentication", updatedBy, false); err != nil {
+		return err
+	}
+	if err := r.Set(ctx, SettingADServer, config.Server, "LDAP server URL", updatedBy, false); err != nil {
+		return err
+	}
+	if err := r.Set(ctx, SettingADBaseDN, config.BaseDN, "LDAP Base DN", updatedBy, false); err != nil {
+		return err
+	}
+	if err := r.Set(ctx, SettingADBindDN, config.BindDN, "LDAP Bind DN (service account)", updatedBy, false); err != nil {
+		return err
+	}
+	if config.BindPassword != "" {
+		if err := r.Set(ctx, SettingADBindPassword, config.BindPassword, "LDAP Bind Password (encrypted)", updatedBy, true); err != nil {
+			return err
+		}
+	}
+	if config.UserFilter != "" {
+		if err := r.Set(ctx, SettingADUserFilter, config.UserFilter, "LDAP User Search Filter", updatedBy, false); err != nil {
+			return err
+		}
+	}
+	if config.GroupFilter != "" {
+		if err := r.Set(ctx, SettingADGroupFilter, config.GroupFilter, "LDAP Group Search Filter", updatedBy, false); err != nil {
+			return err
+		}
+	}
+	if config.UserSearchFilter != "" {
+		if err := r.Set(ctx, SettingADUserSearchFilter, config.UserSearchFilter, "LDAP User Authentication Filter", updatedBy, false); err != nil {
+			return err
+		}
+	}
+	if config.GroupMembershipAttr != "" {
+		if err := r.Set(ctx, SettingADGroupMembershipAttr, config.GroupMembershipAttr, "LDAP Group Membership Attribute", updatedBy, false); err != nil {
+			return err
+		}
+	}
+
+	useTLSStr := "false"
+	if config.UseTLS {
+		useTLSStr = "true"
+	}
+	if err := r.Set(ctx, SettingADUseTLS, useTLSStr, "Use TLS for LDAP connection", updatedBy, false); err != nil {
+		return err
+	}
+
+	insecureStr := "false"
+	if config.InsecureSkipVerify {
+		insecureStr = "true"
+	}
+	if err := r.Set(ctx, SettingADInsecureSkipVerify, insecureStr, "Skip TLS certificate verification", updatedBy, false); err != nil {
+		return err
+	}
+
+	kerberosStr := "false"
+	if config.KerberosEnabled {
+		kerberosStr = "true"
+	}
+	if err := r.Set(ctx, SettingADKerberosEnabled, kerberosStr, "Enable Kerberos/SPNEGO SSO", updatedBy, false); err != nil {
+		return err
+	}
+
+	if config.KerberosKeytab != "" {
+		if err := r.Set(ctx, SettingADKerberosKeytab, config.KerberosKeytab, "Kerberos Keytab Path", updatedBy, false); err != nil {
+			return err
+		}
+	}
+	if config.KerberosService != "" {
+		if err := r.Set(ctx, SettingADKerberosService, config.KerberosService, "Kerberos Service Principal", updatedBy, false); err != nil {
+			return err
+		}
+	}
+	if config.KerberosRealm != "" {
+		if err := r.Set(ctx, SettingADKerberosRealm, config.KerberosRealm, "Kerberos Realm", updatedBy, false); err != nil {
+			return err
+		}
+	}
+	if config.GroupCacheTTL != "" {
+		if err := r.Set(ctx, SettingADGroupCacheTTL, config.GroupCacheTTL, "Group Membership Cache TTL", updatedBy, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// DeleteADConfig removes all Active Directory configuration.
+func (r *SettingsRepo) DeleteADConfig(ctx context.Context) error {
+	keys := []string{
+		SettingADEnabled,
+		SettingADServer,
+		SettingADBaseDN,
+		SettingADBindDN,
+		SettingADBindPassword,
+		SettingADUserFilter,
+		SettingADGroupFilter,
+		SettingADUserSearchFilter,
+		SettingADGroupMembershipAttr,
+		SettingADUseTLS,
+		SettingADInsecureSkipVerify,
+		SettingADKerberosEnabled,
+		SettingADKerberosKeytab,
+		SettingADKerberosService,
+		SettingADKerberosRealm,
+		SettingADGroupCacheTTL,
+	}
+	for _, key := range keys {
+		_ = r.Delete(ctx, key)
+	}
+	return nil
+}
+
+// GetIdentityProvider returns which identity provider is currently active.
+// Returns "ad", "entra", or "none".
+func (r *SettingsRepo) GetIdentityProvider(ctx context.Context) string {
+	adEnabled := r.GetValue(ctx, SettingADEnabled) == "true"
+	entraEnabled := r.GetValue(ctx, SettingEntraAuthEnabled) == "true"
+
+	// AD takes priority if both are somehow enabled
+	if adEnabled {
+		return "ad"
+	}
+	if entraEnabled {
+		return "entra"
+	}
+	return "none"
+}

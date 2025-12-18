@@ -1,8 +1,10 @@
 package httpserver
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
@@ -10,11 +12,14 @@ import (
 	"github.com/jcmturner/gokrb5/v8/keytab"
 	"github.com/jcmturner/gokrb5/v8/service"
 	"github.com/jcmturner/gokrb5/v8/spnego"
+
+	"cedar/internal/ldap"
 )
 
 // KerberosValidator validates Kerberos/SPNEGO tokens.
 type KerberosValidator struct {
-	spnegoSvc *spnego.SPNEGO
+	spnegoSvc  *spnego.SPNEGO
+	ldapClient *ldap.Client // Optional: for looking up user groups after auth
 }
 
 // NewKerberosValidator creates a new Kerberos validator.
@@ -30,6 +35,11 @@ func NewKerberosValidator(keytabPath, servicePrincipal string) (*KerberosValidat
 	return &KerberosValidator{
 		spnegoSvc: svc,
 	}, nil
+}
+
+// SetLDAPClient sets the LDAP client for looking up user groups after Kerberos auth.
+func (v *KerberosValidator) SetLDAPClient(client *ldap.Client) {
+	v.ldapClient = client
 }
 
 // ValidateRequest validates a SPNEGO/Negotiate token from an HTTP request and returns user information.
@@ -89,12 +99,33 @@ func (v *KerberosValidator) ValidateRequest(r *http.Request) (*UserContext, stri
 		respToken = base64.StdEncoding.EncodeToString(st.NegTokenResp.ResponseToken)
 	}
 
-	return &UserContext{
+	user := &UserContext{
 		ID:     fullName,
 		Name:   principalName,
 		Email:  "",  // Kerberos doesn't provide email directly
-		Groups: nil, // Groups would need to be looked up from AD/LDAP
-	}, respToken, nil
+		Groups: nil,
+	}
+
+	// If we have an LDAP client, look up the user's groups and additional info
+	if v.ldapClient != nil && v.ldapClient.IsConfigured() {
+		// Try to extract sAMAccountName from principal (username@REALM -> username)
+		username := principalName
+		if idx := strings.Index(principalName, "@"); idx > 0 {
+			username = principalName[:idx]
+		}
+
+		// Look up the user in LDAP
+		ldapUser, err := v.ldapClient.GetUserByUsername(context.Background(), username)
+		if err != nil {
+			log.Printf("Kerberos: failed to look up user %s in LDAP: %v", username, err)
+		} else if ldapUser != nil {
+			user.Name = ldapUser.DisplayName
+			user.Email = ldapUser.Mail
+			user.Groups = ldapUser.Groups
+		}
+	}
+
+	return user, respToken, nil
 }
 
 // ExtractNegotiateToken extracts a Negotiate token from the Authorization header.

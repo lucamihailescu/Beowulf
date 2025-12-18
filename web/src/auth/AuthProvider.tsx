@@ -6,8 +6,8 @@ import {
   AuthenticationResult,
 } from '@azure/msal-browser';
 import { MsalProvider, useMsal, useIsAuthenticated } from '@azure/msal-react';
-import { createMsalConfig, loginRequest, isAuthEnabled, isJWTAuth, isKerberosAuth, fetchAuthConfig } from './msalConfig';
-import { configureAuth } from '../api';
+import { createMsalConfig, loginRequest, isAuthEnabled, isJWTAuth, isKerberosAuth, isLDAPAuth, fetchAuthConfig, getIdentityProvider } from './msalConfig';
+import { configureAuth, api } from '../api';
 
 // User info type
 export interface UserInfo {
@@ -17,15 +17,21 @@ export interface UserInfo {
   groups: string[];
 }
 
+// LDAP token storage key
+const LDAP_TOKEN_KEY = 'cedar_ldap_token';
+const LDAP_USER_KEY = 'cedar_ldap_user';
+
 // Auth context type
 interface AuthContextType {
   user: UserInfo | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  login: () => Promise<void>;
+  login: (username?: string, password?: string) => Promise<void>;
   logout: () => Promise<void>;
   getAccessToken: () => Promise<string | null>;
-  authMode: 'jwt' | 'kerberos' | 'none';
+  authMode: 'jwt' | 'kerberos' | 'ldap' | 'none';
+  showLoginForm?: boolean;
+  loginError?: string;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -220,6 +226,115 @@ const KerberosAuthContent: React.FC<{ children: React.ReactNode }> = ({ children
   return <AuthContext.Provider value={contextValue}>{children}</AuthContext.Provider>;
 };
 
+// LDAP Auth Provider (for LDAP/AD mode)
+const LDAPAuthContent: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [user, setUser] = useState<UserInfo | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [showLoginForm, setShowLoginForm] = useState(false);
+  const [loginError, setLoginError] = useState<string | undefined>();
+  const apiConfigured = useRef(false);
+
+  // Check for existing token on mount
+  useEffect(() => {
+    const storedToken = sessionStorage.getItem(LDAP_TOKEN_KEY);
+    const storedUser = sessionStorage.getItem(LDAP_USER_KEY);
+
+    if (storedToken && storedUser) {
+      try {
+        const userData = JSON.parse(storedUser);
+        setUser(userData);
+      } catch {
+        // Invalid stored user, clear it
+        sessionStorage.removeItem(LDAP_TOKEN_KEY);
+        sessionStorage.removeItem(LDAP_USER_KEY);
+        setShowLoginForm(true);
+      }
+    } else {
+      setShowLoginForm(true);
+    }
+    setIsLoading(false);
+  }, []);
+
+  const login = useCallback(async (username?: string, password?: string) => {
+    if (!username || !password) {
+      setShowLoginForm(true);
+      return;
+    }
+
+    setIsLoading(true);
+    setLoginError(undefined);
+
+    try {
+      const result = await api.ldapAuth({ username, password });
+      
+      // Store token and user
+      sessionStorage.setItem(LDAP_TOKEN_KEY, result.token);
+      
+      const userData: UserInfo = {
+        id: result.user.username,
+        name: result.user.display_name || result.user.username,
+        email: result.user.email,
+        groups: result.user.groups,
+      };
+      sessionStorage.setItem(LDAP_USER_KEY, JSON.stringify(userData));
+      
+      setUser(userData);
+      setShowLoginForm(false);
+    } catch (error: any) {
+      console.error('LDAP login failed:', error);
+      setLoginError(error.message || 'Authentication failed');
+      setShowLoginForm(true);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  const logout = useCallback(async () => {
+    sessionStorage.removeItem(LDAP_TOKEN_KEY);
+    sessionStorage.removeItem(LDAP_USER_KEY);
+    setUser(null);
+    setShowLoginForm(true);
+  }, []);
+
+  const getAccessToken = useCallback(async (): Promise<string | null> => {
+    return sessionStorage.getItem(LDAP_TOKEN_KEY);
+  }, []);
+
+  // Configure API client with token getter
+  useEffect(() => {
+    if (!apiConfigured.current) {
+      configureAuth({
+        getToken: getAccessToken,
+        onAuthError: () => {
+          // Token expired or invalid, show login form
+          sessionStorage.removeItem(LDAP_TOKEN_KEY);
+          sessionStorage.removeItem(LDAP_USER_KEY);
+          setUser(null);
+          setShowLoginForm(true);
+        },
+      });
+      apiConfigured.current = true;
+    }
+  }, [getAccessToken]);
+
+  const contextValue = useMemo(
+    () => ({
+      user,
+      isAuthenticated: user !== null,
+      isLoading,
+      login,
+      logout,
+      getAccessToken,
+      authMode: 'ldap' as const,
+      showLoginForm,
+      loginError,
+    }),
+    [user, isLoading, login, logout, getAccessToken, showLoginForm, loginError]
+  );
+
+  return <AuthContext.Provider value={contextValue}>{children}</AuthContext.Provider>;
+};
+
 // No-Auth Provider (auth disabled)
 const NoAuthContent: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const contextValue = useMemo(
@@ -267,6 +382,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   if (!isAuthEnabled()) {
     return <NoAuthContent>{children}</NoAuthContent>;
+  }
+
+  // Check if LDAP is enabled (AD identity provider)
+  if (isLDAPAuth()) {
+    const idp = getIdentityProvider();
+    // If Kerberos is also enabled, prefer Kerberos for SSO
+    if (idp?.auth_method === 'ldap+kerberos') {
+      return <KerberosAuthContent>{children}</KerberosAuthContent>;
+    }
+    return <LDAPAuthContent>{children}</LDAPAuthContent>;
   }
 
   if (isKerberosAuth()) {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-chi/httprate"
+	"github.com/golang-jwt/jwt/v5"
 
 	"cedar/internal/config"
 )
@@ -40,10 +41,11 @@ func GetUserFromContext(ctx context.Context) *UserContext {
 
 // AuthMiddleware provides authentication middleware based on configuration.
 type AuthMiddleware struct {
-	mode           string
-	apiKey         string
-	jwtValidator   *JWTValidator
-	kerbValidator  *KerberosValidator
+	mode          string
+	apiKey        string
+	jwtValidator  *JWTValidator
+	kerbValidator *KerberosValidator
+	ldapSignKey   []byte // Signing key for LDAP-issued JWTs
 }
 
 // NewAuthMiddleware creates a new authentication middleware.
@@ -52,6 +54,13 @@ func NewAuthMiddleware(cfg config.Config) (*AuthMiddleware, error) {
 		mode:   strings.ToLower(cfg.AuthMode),
 		apiKey: cfg.APIKey,
 	}
+
+	// Set up LDAP signing key (used for LDAP-issued JWTs)
+	ldapKey := []byte(cfg.APIKey)
+	if len(ldapKey) == 0 {
+		ldapKey = []byte("cedar-ldap-jwt-secret-key-32bytes")
+	}
+	am.ldapSignKey = ldapKey
 
 	switch am.mode {
 	case "jwt":
@@ -64,6 +73,20 @@ func NewAuthMiddleware(cfg config.Config) (*AuthMiddleware, error) {
 		if cfg.KerberosKeytab == "" || cfg.KerberosService == "" {
 			log.Println("Warning: Kerberos auth mode requires KERBEROS_KEYTAB and KERBEROS_SERVICE")
 		} else {
+			kv, err := NewKerberosValidator(cfg.KerberosKeytab, cfg.KerberosService)
+			if err != nil {
+				log.Printf("Warning: Failed to initialize Kerberos validator: %v", err)
+			} else {
+				am.kerbValidator = kv
+			}
+		}
+
+	case "ldap":
+		log.Println("LDAP authentication enabled")
+
+	case "ldap+kerberos":
+		log.Println("LDAP+Kerberos authentication enabled")
+		if cfg.KerberosKeytab != "" && cfg.KerberosService != "" {
 			kv, err := NewKerberosValidator(cfg.KerberosKeytab, cfg.KerberosService)
 			if err != nil {
 				log.Printf("Warning: Failed to initialize Kerberos validator: %v", err)
@@ -144,6 +167,14 @@ func (am *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 			user, err = am.validateJWT(r)
 		case "kerberos":
 			user, err = am.validateKerberos(r)
+		case "ldap":
+			user, err = am.validateLDAPToken(r)
+		case "ldap+kerberos":
+			// Try Kerberos first (SSO), fall back to LDAP token
+			user, err = am.validateKerberos(r)
+			if user == nil && err == nil {
+				user, err = am.validateLDAPToken(r)
+			}
 		}
 
 		if err != nil {
@@ -191,6 +222,61 @@ func (am *AuthMiddleware) validateKerberos(r *http.Request) (*UserContext, error
 		return nil, err
 	}
 	return user, nil
+}
+
+// validateLDAPToken validates an LDAP-issued JWT token from the Authorization header.
+func (am *AuthMiddleware) validateLDAPToken(r *http.Request) (*UserContext, error) {
+	token := ExtractBearerToken(r)
+	if token == "" {
+		return nil, nil // No token provided
+	}
+
+	// Parse and validate the token
+	parsedToken, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, nil
+		}
+		return am.ldapSignKey, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	if claims, ok := parsedToken.Claims.(jwt.MapClaims); ok && parsedToken.Valid {
+		// Check issuer - must be from cedar-ldap
+		if iss, ok := claims["iss"].(string); !ok || iss != "cedar-ldap" {
+			return nil, nil // Not an LDAP token, let other validators try
+		}
+
+		// Extract user info
+		user := &UserContext{
+			ID:    getClaimString(claims, "sub"),
+			Name:  getClaimString(claims, "name"),
+			Email: getClaimString(claims, "email"),
+		}
+
+		// Extract groups
+		if groups, ok := claims["groups"].([]interface{}); ok {
+			for _, g := range groups {
+				if gs, ok := g.(string); ok {
+					user.Groups = append(user.Groups, gs)
+				}
+			}
+		}
+
+		return user, nil
+	}
+
+	return nil, nil
+}
+
+// getClaimString safely extracts a string from JWT claims.
+func getClaimString(claims jwt.MapClaims, key string) string {
+	if val, ok := claims[key].(string); ok {
+		return val
+	}
+	return ""
 }
 
 // handleAuthError sends an appropriate authentication error response.
