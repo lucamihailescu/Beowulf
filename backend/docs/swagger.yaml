@@ -45,6 +45,54 @@ definitions:
       type:
         type: string
     type: object
+  entra.Group:
+    properties:
+      description:
+        type: string
+      displayName:
+        type: string
+      groupTypes:
+        items:
+          type: string
+        type: array
+      id:
+        type: string
+      mail:
+        type: string
+    type: object
+  entra.SearchGroupsResult:
+    properties:
+      groups:
+        items:
+          $ref: '#/definitions/entra.Group'
+        type: array
+      total_count:
+        type: integer
+    type: object
+  entra.SearchUsersResult:
+    properties:
+      total_count:
+        type: integer
+      users:
+        items:
+          $ref: '#/definitions/entra.User'
+        type: array
+    type: object
+  entra.User:
+    properties:
+      department:
+        type: string
+      displayName:
+        type: string
+      id:
+        type: string
+      jobTitle:
+        type: string
+      mail:
+        type: string
+      userPrincipalName:
+        type: string
+    type: object
   httpserver.UserContext:
     properties:
       email:
@@ -207,6 +255,28 @@ definitions:
       id:
         type: string
       type:
+        type: string
+    type: object
+  httpserver.entraSettingsRequest:
+    properties:
+      client_id:
+        type: string
+      client_secret:
+        type: string
+      tenant_id:
+        type: string
+    type: object
+  httpserver.entraSettingsResponse:
+    properties:
+      client_id:
+        type: string
+      configured:
+        type: boolean
+      configured_from_env:
+        type: boolean
+      has_client_secret:
+        type: boolean
+      tenant_id:
         type: string
     type: object
   httpserver.healthResponse:
@@ -1032,6 +1102,165 @@ paths:
       summary: Get Entitlements for IdP Integration
       tags:
       - Entitlements
+  /v1/entra/groups:
+    get:
+      description: Search for groups in Microsoft Entra ID (Azure AD)
+      parameters:
+      - description: Search query (group name prefix)
+        in: query
+        name: q
+        type: string
+      - description: Max results (default 25, max 50)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/entra.SearchGroupsResult'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Search Entra Groups
+      tags:
+      - Entra
+  /v1/entra/groups/{id}:
+    get:
+      description: Get a specific group from Microsoft Entra ID by ID
+      parameters:
+      - description: Group ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/entra.Group'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Get Entra Group
+      tags:
+      - Entra
+  /v1/entra/status:
+    get:
+      description: Returns whether Entra ID integration is configured and available
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Get Entra Integration Status
+      tags:
+      - Entra
+  /v1/entra/users:
+    get:
+      description: Search for users in Microsoft Entra ID (Azure AD)
+      parameters:
+      - description: Search query (name, email, or UPN prefix)
+        in: query
+        name: q
+        type: string
+      - description: Max results (default 25, max 50)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/entra.SearchUsersResult'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Search Entra Users
+      tags:
+      - Entra
+  /v1/entra/users/{id}:
+    get:
+      description: Get a specific user from Microsoft Entra ID by ID or UPN
+      parameters:
+      - description: User ID or User Principal Name
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/entra.User'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Get Entra User
+      tags:
+      - Entra
   /v1/events:
     get:
       description: Server-Sent Events endpoint for real-time policy and entity change
@@ -1133,6 +1362,102 @@ paths:
       summary: Create Namespace
       tags:
       - Namespaces
+  /v1/settings/entra:
+    delete:
+      description: Removes the Entra ID configuration from the database
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Delete Entra Settings
+      tags:
+      - Settings
+    get:
+      description: Returns the current Entra ID configuration (without secrets)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/httpserver.entraSettingsResponse'
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Get Entra Settings
+      tags:
+      - Settings
+    post:
+      consumes:
+      - application/json
+      description: Saves the Entra ID configuration
+      parameters:
+      - description: Entra Settings
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/httpserver.entraSettingsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Save Entra Settings
+      tags:
+      - Settings
+  /v1/settings/entra/test:
+    post:
+      consumes:
+      - application/json
+      description: Tests the Entra ID connection with provided or saved credentials
+      parameters:
+      - description: Entra Settings (optional, uses saved if not provided)
+        in: body
+        name: request
+        schema:
+          $ref: '#/definitions/httpserver.entraSettingsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Test Entra Connection
+      tags:
+      - Settings
 schemes:
 - http
 - https

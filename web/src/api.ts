@@ -133,6 +133,74 @@ export type AuditFilter = {
   offset?: number;
 };
 
+// Entra ID (Azure AD) types
+export type EntraUser = {
+  id: string;
+  displayName: string;
+  userPrincipalName: string;
+  mail: string;
+  jobTitle?: string;
+  department?: string;
+};
+
+export type EntraGroup = {
+  id: string;
+  displayName: string;
+  description?: string;
+  mail?: string;
+  groupTypes?: string[];
+};
+
+export type EntraSearchUsersResult = {
+  users: EntraUser[];
+  total_count: number;
+};
+
+export type EntraSearchGroupsResult = {
+  groups: EntraGroup[];
+  total_count: number;
+};
+
+export type EntraStatus = {
+  configured: boolean;
+  tenant_id: string;
+};
+
+// Settings types
+export type EntraSettings = {
+  tenant_id: string;
+  client_id: string;
+  has_client_secret: boolean;
+  redirect_uri: string;
+  auth_enabled: boolean;
+  configured: boolean;
+  configured_from_env: boolean;
+};
+
+export type EntraSettingsRequest = {
+  tenant_id: string;
+  client_id: string;
+  client_secret: string;
+  redirect_uri?: string;
+  auth_enabled?: boolean;
+};
+
+export type EntraTestResult = {
+  success: boolean;
+  message?: string;
+  error?: string;
+  users_found?: number;
+};
+
+// Auth configuration (public, no secrets)
+export type EntraAuthConfig = {
+  enabled: boolean;
+  tenant_id?: string;
+  client_id?: string;
+  redirect_uri?: string;
+  authority?: string;
+};
+
 function defaultApiBaseUrl(): string {
   // Use relative /api path - nginx will proxy to the backend
   // This works regardless of how the frontend is accessed (localhost, tunnel, LAN IP, etc.)
@@ -350,5 +418,70 @@ export const api = {
 
   checkHealth(): Promise<HealthResponse> {
     return request<HealthResponse>("/health");
+  },
+
+  // Entra ID (Azure AD) endpoints
+  entra: {
+    getStatus(): Promise<EntraStatus> {
+      return request<EntraStatus>("/v1/entra/status");
+    },
+
+    searchUsers(query?: string, limit?: number): Promise<EntraSearchUsersResult> {
+      const params = new URLSearchParams();
+      if (query) params.set("q", query);
+      if (limit) params.set("limit", String(limit));
+      const qs = params.toString();
+      return request<EntraSearchUsersResult>(`/v1/entra/users${qs ? `?${qs}` : ""}`);
+    },
+
+    getUser(id: string): Promise<EntraUser> {
+      return request<EntraUser>(`/v1/entra/users/${encodeURIComponent(id)}`);
+    },
+
+    searchGroups(query?: string, limit?: number): Promise<EntraSearchGroupsResult> {
+      const params = new URLSearchParams();
+      if (query) params.set("q", query);
+      if (limit) params.set("limit", String(limit));
+      const qs = params.toString();
+      return request<EntraSearchGroupsResult>(`/v1/entra/groups${qs ? `?${qs}` : ""}`);
+    },
+
+    getGroup(id: string): Promise<EntraGroup> {
+      return request<EntraGroup>(`/v1/entra/groups/${encodeURIComponent(id)}`);
+    },
+  },
+
+  // Settings endpoints
+  settings: {
+    getEntra(): Promise<EntraSettings> {
+      return request<EntraSettings>("/v1/settings/entra");
+    },
+
+    saveEntra(settings: EntraSettingsRequest): Promise<{ status: string }> {
+      return request<{ status: string }>("/v1/settings/entra", {
+        method: "POST",
+        body: JSON.stringify(settings),
+      });
+    },
+
+    testEntra(settings?: EntraSettingsRequest): Promise<EntraTestResult> {
+      return request<EntraTestResult>("/v1/settings/entra/test", {
+        method: "POST",
+        body: settings ? JSON.stringify(settings) : "{}",
+      });
+    },
+
+    deleteEntra(): Promise<{ status: string }> {
+      return request<{ status: string }>("/v1/settings/entra", {
+        method: "DELETE",
+      });
+    },
+  },
+
+  // Auth configuration (public endpoint)
+  auth: {
+    getConfig(): Promise<EntraAuthConfig> {
+      return request<EntraAuthConfig>("/v1/auth/config");
+    },
   },
 };

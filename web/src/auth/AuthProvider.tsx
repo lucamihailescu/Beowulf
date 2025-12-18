@@ -6,7 +6,7 @@ import {
   AuthenticationResult,
 } from '@azure/msal-browser';
 import { MsalProvider, useMsal, useIsAuthenticated } from '@azure/msal-react';
-import { msalConfig, loginRequest, isAuthEnabled, isJWTAuth, isKerberosAuth } from './msalConfig';
+import { createMsalConfig, loginRequest, isAuthEnabled, isJWTAuth, isKerberosAuth, fetchAuthConfig } from './msalConfig';
 import { configureAuth } from '../api';
 
 // User info type
@@ -30,17 +30,26 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// MSAL instance - created once
-const msalInstance = new PublicClientApplication(msalConfig);
+// MSAL instance - will be created after config is fetched
+let msalInstance: PublicClientApplication | null = null;
 
-// Initialize MSAL
-const initializeMsal = async () => {
+// Initialize MSAL with dynamic config
+const initializeMsal = async (): Promise<PublicClientApplication> => {
+  // First, fetch dynamic auth config from backend
+  await fetchAuthConfig();
+  
+  // Create MSAL instance with effective config
+  const config = createMsalConfig();
+  msalInstance = new PublicClientApplication(config);
+  
   await msalInstance.initialize();
   // Handle redirect response
   const response = await msalInstance.handleRedirectPromise();
   if (response) {
     msalInstance.setActiveAccount(response.account);
   }
+  
+  return msalInstance;
 };
 
 // MSAL Auth Provider (for JWT mode)
@@ -232,16 +241,27 @@ const NoAuthContent: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 // Main Auth Provider component
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [msalReady, setMsalReady] = useState(false);
+  const [configLoaded, setConfigLoaded] = useState(false);
+  const [msalApp, setMsalApp] = useState<PublicClientApplication | null>(null);
 
   useEffect(() => {
-    if (isJWTAuth()) {
-      initializeMsal().then(() => setMsalReady(true));
-    } else {
+    // Always fetch config first, then decide auth mode
+    const init = async () => {
+      await fetchAuthConfig();
+      setConfigLoaded(true);
+      
+      // If JWT/Entra auth is enabled (either via env or dynamic config), initialize MSAL
+      if (isJWTAuth()) {
+        const instance = await initializeMsal();
+        setMsalApp(instance);
+      }
       setMsalReady(true);
-    }
+    };
+    
+    init();
   }, []);
 
-  if (!msalReady) {
+  if (!configLoaded || !msalReady) {
     return null; // Or a loading spinner
   }
 
@@ -253,9 +273,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return <KerberosAuthContent>{children}</KerberosAuthContent>;
   }
 
-  if (isJWTAuth()) {
+  if (isJWTAuth() && msalApp) {
     return (
-      <MsalProvider instance={msalInstance}>
+      <MsalProvider instance={msalApp}>
         <MSALAuthContent>{children}</MSALAuthContent>
       </MsalProvider>
     );

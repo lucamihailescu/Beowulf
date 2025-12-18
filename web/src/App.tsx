@@ -20,6 +20,7 @@ import NamespaceDetails from "./pages/NamespaceDetails";
 import Policies from "./pages/Policies";
 import Audit from "./pages/Audit";
 import Admin from "./pages/Admin";
+import Settings from "./pages/Settings";
 import { AuthProvider, useAuth, isAuthEnabled } from "./auth";
 import { useTheme } from "./ThemeProvider";
 
@@ -146,6 +147,8 @@ function AppShell() {
       { key: "/policies", icon: <FileTextOutlined />, label: "Policies" },
       { key: "/audit", icon: <AuditOutlined />, label: "Audit" },
       { key: "/admin", icon: <SettingOutlined />, label: "Admin" },
+      { type: "divider" as const },
+      { key: "/settings", icon: <SettingOutlined />, label: "Settings" },
     ],
     []
   );
@@ -239,6 +242,7 @@ function AppShell() {
               <Route path="/policies" element={<Policies />} />
               <Route path="/audit" element={<Audit />} />
               <Route path="/admin" element={<Admin />} />
+              <Route path="/settings" element={<Settings />} />
             </Routes>
           </div>
         </Layout.Content>

@@ -1,13 +1,22 @@
 import { useState, useEffect } from "react";
-import { Card, Col, Row, Statistic, Typography } from "antd";
-import { AppstoreOutlined, FileProtectOutlined, AuditOutlined, SettingOutlined, SafetyOutlined, TeamOutlined } from "@ant-design/icons";
+import { Card, Col, Row, Statistic, Typography, Alert, Button, Space } from "antd";
+import { AppstoreOutlined, FileProtectOutlined, AuditOutlined, SettingOutlined, SafetyOutlined, TeamOutlined, CloudOutlined } from "@ant-design/icons";
 import { Link } from "react-router-dom";
-import { api, type Application } from "../api";
+import { api, type Application, type EntraSettings } from "../api";
+import { EntraSetupWizard } from "../components/EntraSetupWizard";
 
 export default function Dashboard() {
   const [apps, setApps] = useState<Application[]>([]);
   const [loading, setLoading] = useState(true);
   const [cedarVersion, setCedarVersion] = useState<string>("Unknown");
+  const [entraSettings, setEntraSettings] = useState<EntraSettings | null>(null);
+  const [showEntraWizard, setShowEntraWizard] = useState(false);
+
+  const loadEntraSettings = () => {
+    api.settings.getEntra()
+      .then(setEntraSettings)
+      .catch(() => setEntraSettings(null));
+  };
 
   useEffect(() => {
     setLoading(true);
@@ -25,6 +34,9 @@ export default function Dashboard() {
         }
       })
       .catch(() => {});
+
+    // Fetch Entra settings
+    loadEntraSettings();
   }, []);
 
   return (
@@ -37,6 +49,32 @@ export default function Dashboard() {
           Welcome to the Enterprise Policy Management portal. Manage applications, policies, and test authorization decisions.
         </Typography.Paragraph>
       </div>
+
+      {/* Entra Setup Notification */}
+      {entraSettings && !entraSettings.configured && (
+        <Alert
+          type="info"
+          showIcon
+          icon={<CloudOutlined />}
+          message="Microsoft Entra ID Integration Available"
+          description="Connect to Microsoft Entra ID (Azure AD) to easily search and select users and groups when creating policies."
+          action={
+            <Button type="primary" size="small" onClick={() => setShowEntraWizard(true)}>
+              Set Up Entra ID
+            </Button>
+          }
+        />
+      )}
+
+      {/* Entra Setup Wizard */}
+      <EntraSetupWizard
+        open={showEntraWizard}
+        onClose={() => setShowEntraWizard(false)}
+        onComplete={() => {
+          setShowEntraWizard(false);
+          loadEntraSettings();
+        }}
+      />
 
       {/* Stats */}
       <Row gutter={[16, 16]}>

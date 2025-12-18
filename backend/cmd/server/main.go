@@ -33,6 +33,7 @@ func main() {
 	schemaRepo := storage.NewSchemaRepo(db)
 	auditRepo := storage.NewAuditRepo(db)
 	namespaceRepo := storage.NewNamespaceRepo(db)
+	settingsRepo := storage.NewSettingsRepo(db)
 
 	var cache *storage.Cache
 	redisClient := storage.NewRedis(cfg.RedisAddr, cfg.RedisPass)
@@ -66,7 +67,7 @@ func main() {
 		}
 	}()
 
-	r := httpserver.NewRouter(cfg, authzSvc, appRepo, policyRepo, entityRepo, schemaRepo, auditRepo, namespaceRepo, cache)
+	r := httpserver.NewRouter(cfg, authzSvc, appRepo, policyRepo, entityRepo, schemaRepo, auditRepo, namespaceRepo, settingsRepo, cache)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr(),

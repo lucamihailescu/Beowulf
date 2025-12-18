@@ -22,7 +22,9 @@ import {
   FileOutlined,
   LockOutlined,
   UnlockOutlined,
+  CloudOutlined,
 } from "@ant-design/icons";
+import { EntraPicker, EntraSelection } from "./EntraPicker";
 
 type PolicyTemplate = {
   id: string;
@@ -38,7 +40,7 @@ type TemplateVariable = {
   key: string;
   label: string;
   description: string;
-  type: "text" | "select" | "multi-select";
+  type: "text" | "select" | "multi-select" | "entra-user" | "entra-group" | "entra-both";
   placeholder?: string;
   options?: { value: string; label: string }[];
   required?: boolean;
@@ -64,9 +66,9 @@ const POLICY_TEMPLATES: PolicyTemplate[] = [
     variables: [
       {
         key: "adminGroup",
-        label: "Admin Group ID",
-        description: "The ID of the admin group (e.g., 'admins', 'superusers')",
-        type: "text",
+        label: "Admin Group",
+        description: "Select a group from Entra ID or enter a group ID manually",
+        type: "entra-group",
         placeholder: "admins",
         required: true,
       },
@@ -131,9 +133,9 @@ ${actions.map((action) => `permit (
     variables: [
       {
         key: "groupId",
-        label: "Group ID",
-        description: "The ID of the group to grant access",
-        type: "text",
+        label: "Group",
+        description: "Select a group from Entra ID or enter a group ID manually",
+        type: "entra-group",
         placeholder: "engineering",
         required: true,
       },
@@ -180,9 +182,9 @@ permit (
       },
       {
         key: "groupId",
-        label: "Group ID",
-        description: "The group that should have access",
-        type: "text",
+        label: "Group",
+        description: "Select a group from Entra ID or enter a group ID manually",
+        type: "entra-group",
         placeholder: "team-alpha",
         required: true,
       },
@@ -504,6 +506,9 @@ export default function PolicyTemplateWizard({
               <Space style={{ marginBottom: 4 }}>
                 <Typography.Text strong>{variable.label}</Typography.Text>
                 {variable.required && <Tag color="red">Required</Tag>}
+                {(variable.type === "entra-user" || variable.type === "entra-group" || variable.type === "entra-both") && (
+                  <Tag color="cyan" icon={<CloudOutlined />}>Entra ID</Tag>
+                )}
               </Space>
               <Typography.Paragraph type="secondary" style={{ margin: "4px 0 8px" }}>
                 {variable.description}
@@ -525,6 +530,54 @@ export default function PolicyTemplateWizard({
                   placeholder={variable.placeholder}
                   options={variable.options}
                 />
+              )}
+              {(variable.type === "entra-user" || variable.type === "entra-group" || variable.type === "entra-both") && (
+                <Space direction="vertical" style={{ width: "100%" }}>
+                  <EntraPicker
+                    mode="single"
+                    allowedTypes={
+                      variable.type === "entra-user" ? ["User"] :
+                      variable.type === "entra-group" ? ["Group"] :
+                      ["User", "Group"]
+                    }
+                    value={
+                      variableValues[variable.key]
+                        ? [{
+                            type: variable.type === "entra-user" ? "User" : "Group",
+                            id: variableValues[variable.key],
+                            displayName: variableValues[`${variable.key}_name`] || variableValues[variable.key],
+                          }]
+                        : []
+                    }
+                    onChange={(selections) => {
+                      if (selections.length > 0) {
+                        setVariableValues({
+                          ...variableValues,
+                          [variable.key]: selections[0].id,
+                          [`${variable.key}_name`]: selections[0].displayName,
+                        });
+                      } else {
+                        setVariableValues({
+                          ...variableValues,
+                          [variable.key]: "",
+                          [`${variable.key}_name`]: "",
+                        });
+                      }
+                    }}
+                    placeholder={`Search Entra for ${variable.type === "entra-user" ? "users" : variable.type === "entra-group" ? "groups" : "users/groups"}...`}
+                  />
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    Or enter manually:
+                  </Typography.Text>
+                  <Input
+                    size="small"
+                    value={variableValues[variable.key] || ""}
+                    onChange={(e) =>
+                      setVariableValues({ ...variableValues, [variable.key]: e.target.value })
+                    }
+                    placeholder={variable.placeholder}
+                  />
+                </Space>
               )}
             </div>
           ))}

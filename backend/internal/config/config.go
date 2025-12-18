@@ -20,13 +20,14 @@ type Config struct {
 	CORSOrigins   string
 
 	// Authentication configuration
-	AuthMode        string // "jwt", "kerberos", or "none"
-	APIKey          string // Optional API Key for external read-only access
-	AzureTenantID   string // Entra ID tenant ID
-	AzureClientID   string // App registration client ID
-	AzureAudience   string // Expected token audience
-	KerberosKeytab  string // Path to keytab file
-	KerberosService string // Service principal (e.g., HTTP/cedar.example.com)
+	AuthMode          string // "jwt", "kerberos", or "none"
+	APIKey            string // Optional API Key for external read-only access
+	AzureTenantID     string // Entra ID tenant ID
+	AzureClientID     string // App registration client ID
+	AzureClientSecret string // App registration client secret (for Graph API)
+	AzureAudience     string // Expected token audience
+	KerberosKeytab    string // Path to keytab file
+	KerberosService   string // Service principal (e.g., HTTP/cedar.example.com)
 
 	// Rate Limiting
 	RateLimitRequests int           // Max requests per window per caller (0 = disabled)
@@ -48,13 +49,14 @@ func Load() Config {
 		CORSOrigins:   getenv("CORS_ALLOW_ORIGINS", "*"),
 
 		// Authentication
-		AuthMode:        getenv("AUTH_MODE", "none"),
-		APIKey:          getenv("API_KEY", ""),
-		AzureTenantID:   getenv("AZURE_TENANT_ID", ""),
-		AzureClientID:   getenv("AZURE_CLIENT_ID", ""),
-		AzureAudience:   getenv("AZURE_AUDIENCE", ""),
-		KerberosKeytab:  getenv("KERBEROS_KEYTAB", ""),
-		KerberosService: getenv("KERBEROS_SERVICE", ""),
+		AuthMode:          getenv("AUTH_MODE", "none"),
+		APIKey:            getenv("API_KEY", ""),
+		AzureTenantID:     getenv("AZURE_TENANT_ID", ""),
+		AzureClientID:     getenv("AZURE_CLIENT_ID", ""),
+		AzureClientSecret: getenv("AZURE_CLIENT_SECRET", ""),
+		AzureAudience:     getenv("AZURE_AUDIENCE", ""),
+		KerberosKeytab:    getenv("KERBEROS_KEYTAB", ""),
+		KerberosService:   getenv("KERBEROS_SERVICE", ""),
 
 		// Rate Limiting
 		RateLimitRequests: int(getint("RATE_LIMIT_REQUESTS", 100)),       // Default: 100 requests
