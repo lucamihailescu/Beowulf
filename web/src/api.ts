@@ -269,7 +269,7 @@ export type CACertificateRequest = {
 };
 
 // Backend Instance types
-export type BackendInstanceStatus = 'pending' | 'approved' | 'rejected';
+export type BackendInstanceStatus = 'pending' | 'approved' | 'rejected' | 'suspended';
 
 export type BackendInstance = {
   id: number;
@@ -744,6 +744,18 @@ export const api = {
       return request<BackendInstance>(`/v1/cluster/backends/${encodeURIComponent(instanceId)}/reject`, {
         method: "POST",
         body: JSON.stringify({ reason }),
+      });
+    },
+
+    suspend(instanceId: string): Promise<BackendInstance> {
+      return request<BackendInstance>(`/v1/cluster/backends/${encodeURIComponent(instanceId)}/suspend`, {
+        method: "POST",
+      });
+    },
+
+    unsuspend(instanceId: string): Promise<BackendInstance> {
+      return request<BackendInstance>(`/v1/cluster/backends/${encodeURIComponent(instanceId)}/unsuspend`, {
+        method: "POST",
       });
     },
 

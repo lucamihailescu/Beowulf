@@ -365,6 +365,8 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 		r.Get("/{instanceId}", api.handleGetBackendInstanceStatus)
 		r.Post("/{instanceId}/approve", api.handleApproveBackendInstance)
 		r.Post("/{instanceId}/reject", api.handleRejectBackendInstance)
+		r.Post("/{instanceId}/suspend", api.handleSuspendBackendInstance)
+		r.Post("/{instanceId}/unsuspend", api.handleUnsuspendBackendInstance)
 		r.Delete("/{instanceId}", api.handleDeleteBackendInstance)
 	})
 

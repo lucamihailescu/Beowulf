@@ -14,9 +14,10 @@ import (
 type BackendInstanceStatus string
 
 const (
-	BackendStatusPending  BackendInstanceStatus = "pending"
-	BackendStatusApproved BackendInstanceStatus = "approved"
-	BackendStatusRejected BackendInstanceStatus = "rejected"
+	BackendStatusPending   BackendInstanceStatus = "pending"
+	BackendStatusApproved  BackendInstanceStatus = "approved"
+	BackendStatusRejected  BackendInstanceStatus = "rejected"
+	BackendStatusSuspended BackendInstanceStatus = "suspended"
 )
 
 // BackendInstance represents a backend instance in the cluster
@@ -591,6 +592,158 @@ func (r *BackendInstanceRepo) Reject(ctx context.Context, instanceID string, rej
 	}
 	if rejectionReasonOut != nil {
 		inst.RejectionReason = *rejectionReasonOut
+	}
+	if cedarVer != nil {
+		inst.CedarVersion = *cedarVer
+	}
+	if osInfo != nil {
+		inst.OSInfo = *osInfo
+	}
+	if arch != nil {
+		inst.Arch = *arch
+	}
+	if lastHB != nil {
+		inst.LastHeartbeat = lastHB
+	}
+	if len(metadata) > 0 {
+		_ = json.Unmarshal(metadata, &inst.Metadata)
+	}
+
+	return &inst, nil
+}
+
+// Suspend suspends an approved backend instance (stops it from receiving traffic)
+func (r *BackendInstanceRepo) Suspend(ctx context.Context, instanceID string, suspendedBy string) (*BackendInstance, error) {
+	query := `
+		UPDATE backend_instances SET
+			status = $2,
+			updated_at = NOW()
+		WHERE instance_id = $1 AND status = 'approved'
+		RETURNING id, instance_id, hostname, ip_address, status,
+		          cert_fingerprint, cluster_secret_verified,
+		          requested_at, approved_at, approved_by,
+		          rejected_at, rejected_by, rejection_reason,
+		          cedar_version, os_info, arch, last_heartbeat, metadata,
+		          created_at, updated_at
+	`
+
+	var inst BackendInstance
+	var ipAddr, certFP, approvedByOut, rejectedBy, rejectionReason, cedarVer, osInfo, arch *string
+	var approvedAt, rejectedAt, lastHB *time.Time
+	var metadata []byte
+
+	err := r.pool.QueryRow(ctx, query, instanceID, BackendStatusSuspended).Scan(
+		&inst.ID, &inst.InstanceID, &inst.Hostname, &ipAddr, &inst.Status,
+		&certFP, &inst.ClusterSecretVerified,
+		&inst.RequestedAt, &approvedAt, &approvedByOut,
+		&rejectedAt, &rejectedBy, &rejectionReason,
+		&cedarVer, &osInfo, &arch, &lastHB, &metadata,
+		&inst.CreatedAt, &inst.UpdatedAt,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, fmt.Errorf("backend instance not found or not approved")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to suspend backend instance: %w", err)
+	}
+
+	// Set optional fields
+	if ipAddr != nil {
+		inst.IPAddress = *ipAddr
+	}
+	if certFP != nil {
+		inst.CertFingerprint = *certFP
+	}
+	if approvedAt != nil {
+		inst.ApprovedAt = approvedAt
+	}
+	if approvedByOut != nil {
+		inst.ApprovedBy = *approvedByOut
+	}
+	if rejectedAt != nil {
+		inst.RejectedAt = rejectedAt
+	}
+	if rejectedBy != nil {
+		inst.RejectedBy = *rejectedBy
+	}
+	if rejectionReason != nil {
+		inst.RejectionReason = *rejectionReason
+	}
+	if cedarVer != nil {
+		inst.CedarVersion = *cedarVer
+	}
+	if osInfo != nil {
+		inst.OSInfo = *osInfo
+	}
+	if arch != nil {
+		inst.Arch = *arch
+	}
+	if lastHB != nil {
+		inst.LastHeartbeat = lastHB
+	}
+	if len(metadata) > 0 {
+		_ = json.Unmarshal(metadata, &inst.Metadata)
+	}
+
+	return &inst, nil
+}
+
+// Unsuspend reactivates a suspended backend instance
+func (r *BackendInstanceRepo) Unsuspend(ctx context.Context, instanceID string, unsuspendedBy string) (*BackendInstance, error) {
+	query := `
+		UPDATE backend_instances SET
+			status = $2,
+			updated_at = NOW()
+		WHERE instance_id = $1 AND status = 'suspended'
+		RETURNING id, instance_id, hostname, ip_address, status,
+		          cert_fingerprint, cluster_secret_verified,
+		          requested_at, approved_at, approved_by,
+		          rejected_at, rejected_by, rejection_reason,
+		          cedar_version, os_info, arch, last_heartbeat, metadata,
+		          created_at, updated_at
+	`
+
+	var inst BackendInstance
+	var ipAddr, certFP, approvedByOut, rejectedBy, rejectionReason, cedarVer, osInfo, arch *string
+	var approvedAt, rejectedAt, lastHB *time.Time
+	var metadata []byte
+
+	err := r.pool.QueryRow(ctx, query, instanceID, BackendStatusApproved).Scan(
+		&inst.ID, &inst.InstanceID, &inst.Hostname, &ipAddr, &inst.Status,
+		&certFP, &inst.ClusterSecretVerified,
+		&inst.RequestedAt, &approvedAt, &approvedByOut,
+		&rejectedAt, &rejectedBy, &rejectionReason,
+		&cedarVer, &osInfo, &arch, &lastHB, &metadata,
+		&inst.CreatedAt, &inst.UpdatedAt,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, fmt.Errorf("backend instance not found or not suspended")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to unsuspend backend instance: %w", err)
+	}
+
+	// Set optional fields
+	if ipAddr != nil {
+		inst.IPAddress = *ipAddr
+	}
+	if certFP != nil {
+		inst.CertFingerprint = *certFP
+	}
+	if approvedAt != nil {
+		inst.ApprovedAt = approvedAt
+	}
+	if approvedByOut != nil {
+		inst.ApprovedBy = *approvedByOut
+	}
+	if rejectedAt != nil {
+		inst.RejectedAt = rejectedAt
+	}
+	if rejectedBy != nil {
+		inst.RejectedBy = *rejectedBy
+	}
+	if rejectionReason != nil {
+		inst.RejectionReason = *rejectionReason
 	}
 	if cedarVer != nil {
 		inst.CedarVersion = *cedarVer

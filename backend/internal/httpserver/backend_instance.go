@@ -236,6 +236,86 @@ func (a *API) handleRejectBackendInstance(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(instance)
 }
 
+// handleSuspendBackendInstance suspends an approved backend instance
+func (a *API) handleSuspendBackendInstance(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	instanceID := chi.URLParam(r, "instanceId")
+
+	// Get current user for audit
+	suspendedBy := "system"
+	if user := GetUserFromContext(ctx); user != nil {
+		suspendedBy = user.ID
+	}
+
+	instance, err := a.backendInstanceRepo.Suspend(ctx, instanceID, suspendedBy)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Publish SSE event for the backend to pick up
+	if a.sseBroker != nil {
+		a.sseBroker.Publish(SSEEvent{
+			Type: "backend_suspended",
+			Data: map[string]interface{}{
+				"instance_id": instanceID,
+				"status":      "suspended",
+			},
+		})
+	}
+
+	// Audit log
+	if a.audits != nil {
+		_ = a.audits.Log(ctx, nil, suspendedBy, "backend.suspend", instanceID, "", map[string]interface{}{
+			"hostname": instance.Hostname,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(instance)
+}
+
+// handleUnsuspendBackendInstance reactivates a suspended backend instance
+func (a *API) handleUnsuspendBackendInstance(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	instanceID := chi.URLParam(r, "instanceId")
+
+	// Get current user for audit
+	unsuspendedBy := "system"
+	if user := GetUserFromContext(ctx); user != nil {
+		unsuspendedBy = user.ID
+	}
+
+	instance, err := a.backendInstanceRepo.Unsuspend(ctx, instanceID, unsuspendedBy)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Publish SSE event for the backend to pick up
+	if a.sseBroker != nil {
+		a.sseBroker.Publish(SSEEvent{
+			Type: "backend_unsuspended",
+			Data: map[string]interface{}{
+				"instance_id": instanceID,
+				"status":      "approved",
+			},
+		})
+	}
+
+	// Audit log
+	if a.audits != nil {
+		_ = a.audits.Log(ctx, nil, unsuspendedBy, "backend.unsuspend", instanceID, "", map[string]interface{}{
+			"hostname": instance.Hostname,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(instance)
+}
+
 // handleDeleteBackendInstance removes a backend instance
 func (a *API) handleDeleteBackendInstance(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()

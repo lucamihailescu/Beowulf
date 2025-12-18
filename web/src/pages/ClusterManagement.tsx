@@ -28,6 +28,8 @@ import {
   CloudServerOutlined,
   SafetyCertificateOutlined,
   ExclamationCircleOutlined,
+  PauseCircleOutlined,
+  PlayCircleOutlined,
 } from "@ant-design/icons";
 import { api, BackendInstance, BackendInstanceStatus, BackendAuthConfig } from "../api";
 
@@ -108,6 +110,32 @@ export default function ClusterManagement() {
     }
   };
 
+  const handleSuspend = async (instance: BackendInstance) => {
+    setActionLoading(instance.instance_id);
+    try {
+      await api.backends.suspend(instance.instance_id);
+      message.success(`Backend ${instance.hostname} suspended`);
+      fetchData();
+    } catch (err: any) {
+      message.error(err.message || "Failed to suspend backend");
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleUnsuspend = async (instance: BackendInstance) => {
+    setActionLoading(instance.instance_id);
+    try {
+      await api.backends.unsuspend(instance.instance_id);
+      message.success(`Backend ${instance.hostname} resumed`);
+      fetchData();
+    } catch (err: any) {
+      message.error(err.message || "Failed to resume backend");
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const handleApprovalToggle = async (checked: boolean) => {
     try {
       const updated = await api.settings.updateApprovalRequired(checked);
@@ -138,6 +166,12 @@ export default function ClusterManagement() {
             Rejected
           </Tag>
         );
+      case "suspended":
+        return (
+          <Tag color="orange" icon={<PauseCircleOutlined />}>
+            Suspended
+          </Tag>
+        );
       default:
         return <Tag>{status}</Tag>;
     }
@@ -156,6 +190,7 @@ export default function ClusterManagement() {
 
   const pendingInstances = instances.filter((i) => i.status === "pending");
   const approvedInstances = instances.filter((i) => i.status === "approved");
+  const suspendedInstances = instances.filter((i) => i.status === "suspended");
   const rejectedInstances = instances.filter((i) => i.status === "rejected");
 
   const columns = [
@@ -244,6 +279,76 @@ export default function ClusterManagement() {
           );
         }
 
+        if (record.status === "approved") {
+          return (
+            <Space>
+              <Popconfirm
+                title="Suspend Backend"
+                description="This will stop the backend from receiving traffic. You can resume it later."
+                onConfirm={() => handleSuspend(record)}
+                okText="Suspend"
+              >
+                <Button
+                  size="small"
+                  icon={<PauseCircleOutlined />}
+                  loading={isLoading}
+                >
+                  Suspend
+                </Button>
+              </Popconfirm>
+              <Popconfirm
+                title="Remove Backend"
+                description="Are you sure you want to remove this backend from the cluster?"
+                onConfirm={() => handleDelete(record)}
+                okText="Remove"
+                okType="danger"
+              >
+                <Button
+                  danger
+                  size="small"
+                  icon={<DeleteOutlined />}
+                  loading={isLoading}
+                >
+                  Remove
+                </Button>
+              </Popconfirm>
+            </Space>
+          );
+        }
+
+        if (record.status === "suspended") {
+          return (
+            <Space>
+              <Button
+                type="primary"
+                size="small"
+                icon={<PlayCircleOutlined />}
+                loading={isLoading}
+                onClick={() => handleUnsuspend(record)}
+              >
+                Resume
+              </Button>
+              <Popconfirm
+                title="Remove Backend"
+                description="Are you sure you want to remove this backend from the cluster?"
+                onConfirm={() => handleDelete(record)}
+                okText="Remove"
+                okType="danger"
+              >
+                <Button
+                  danger
+                  size="small"
+                  icon={<DeleteOutlined />}
+                  loading={isLoading}
+                >
+                  Remove
+                </Button>
+              </Popconfirm>
+            </Space>
+          );
+        }
+
+        // For rejected or other statuses, just show remove
         return (
           <Popconfirm
             title="Remove Backend"
@@ -279,7 +384,7 @@ export default function ClusterManagement() {
 
       {/* Stats Cards */}
       <Row gutter={16}>
-        <Col span={6}>
+        <Col xs={12} sm={8} lg={4}>
           <Card>
             <Statistic
               title="Total Backends"
@@ -288,17 +393,17 @@ export default function ClusterManagement() {
             />
           </Card>
         </Col>
-        <Col span={6}>
+        <Col xs={12} sm={8} lg={4}>
           <Card>
             <Statistic
-              title="Pending Approval"
+              title="Pending"
               value={counts["pending"] || 0}
               valueStyle={{ color: counts["pending"] ? "#faad14" : undefined }}
               prefix={<ClockCircleOutlined />}
             />
           </Card>
         </Col>
-        <Col span={6}>
+        <Col xs={12} sm={8} lg={4}>
           <Card>
             <Statistic
               title="Approved"
@@ -308,7 +413,17 @@ export default function ClusterManagement() {
             />
           </Card>
         </Col>
-        <Col span={6}>
+        <Col xs={12} sm={8} lg={4}>
+          <Card>
+            <Statistic
+              title="Suspended"
+              value={counts["suspended"] || 0}
+              valueStyle={{ color: counts["suspended"] ? "#fa8c16" : undefined }}
+              prefix={<PauseCircleOutlined />}
+            />
+          </Card>
+        </Col>
+        <Col xs={12} sm={8} lg={4}>
           <Card>
             <Statistic
               title="Rejected"
