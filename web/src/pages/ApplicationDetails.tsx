@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { Alert, Button, Card, Checkbox, Collapse, Descriptions, Dropdown, Input, Modal, Select, Space, Table, Tag, Typography } from "antd";
-import { CheckCircleOutlined, CloseCircleOutlined, PlusOutlined, EditOutlined, DownOutlined, FileTextOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { CheckCircleOutlined, CloseCircleOutlined, PlusOutlined, EditOutlined, DownOutlined, FileTextOutlined, ThunderboltOutlined, DeleteOutlined } from "@ant-design/icons";
 import { api, type Application, type PolicySummary, type PolicyDetails, type Schema, type AuthorizeResponse } from "../api";
 import SchemaWizard from "../components/SchemaWizard";
 import PolicyTemplateWizard from "../components/PolicyTemplateWizard";
@@ -50,6 +50,42 @@ export default function ApplicationDetails() {
 
   const commonActions = ["view", "edit", "delete", "create", "share", "admin", "read", "write"];
   const commonTypes = ["User", "Group", "Document", "Folder", "Resource"];
+
+  // Resource Types & Actions manager state
+  const [newResourceType, setNewResourceType] = useState("");
+  const [newAction, setNewAction] = useState("");
+  const [updatingSchema, setUpdatingSchema] = useState(false);
+
+  // Parse entity types and actions from the active schema
+  const activeSchema = useMemo(() => schemas.find(s => s.active), [schemas]);
+
+  const schemaEntityTypes = useMemo(() => {
+    if (!activeSchema?.schema_text) return [];
+    try {
+      const parsed = JSON.parse(activeSchema.schema_text);
+      const namespace = parsed[""] || parsed;
+      if (namespace?.entityTypes) {
+        return Object.keys(namespace.entityTypes).sort();
+      }
+    } catch (e) {
+      // Ignore parse errors
+    }
+    return [];
+  }, [activeSchema]);
+
+  const schemaActions = useMemo(() => {
+    if (!activeSchema?.schema_text) return [];
+    try {
+      const parsed = JSON.parse(activeSchema.schema_text);
+      const namespace = parsed[""] || parsed;
+      if (namespace?.actions) {
+        return Object.keys(namespace.actions).sort();
+      }
+    } catch (e) {
+      // Ignore parse errors
+    }
+    return [];
+  }, [activeSchema]);
 
   async function runSimulation() {
     if (!simPrincipalId || !simResourceId) {
@@ -284,6 +320,79 @@ export default function ApplicationDetails() {
     }
   }
 
+  // Helper to build schema JSON from current types and actions
+  function buildSchemaJson(entityTypes: string[], actions: string[]): string {
+    const entityTypesObj: Record<string, object> = {};
+    for (const t of entityTypes) {
+      // Default: User and Group can be members of Group
+      if (t === "User" || t === "Group") {
+        entityTypesObj[t] = entityTypes.includes("Group") ? { memberOfTypes: ["Group"] } : {};
+      } else {
+        entityTypesObj[t] = {};
+      }
+    }
+
+    const actionsObj: Record<string, object> = {};
+    for (const a of actions) {
+      // Default: any principal type, any resource type
+      actionsObj[a] = {};
+    }
+
+    return JSON.stringify({ "": { entityTypes: entityTypesObj, actions: actionsObj } }, null, 2);
+  }
+
+  async function updateSchemaWithTypesAndActions(newEntityTypes: string[], newActions: string[]) {
+    setUpdatingSchema(true);
+    setError("");
+    try {
+      const schemaText = buildSchemaJson(newEntityTypes, newActions);
+      await api.createSchema(appId, { schema_text: schemaText, activate: true });
+      setSchemas(await api.listSchemas(appId));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setUpdatingSchema(false);
+    }
+  }
+
+  async function addResourceType() {
+    const trimmed = newResourceType.trim();
+    if (!trimmed) return;
+    if (schemaEntityTypes.includes(trimmed)) {
+      setError(`Resource type "${trimmed}" already exists.`);
+      return;
+    }
+    const updatedTypes = [...schemaEntityTypes, trimmed];
+    await updateSchemaWithTypesAndActions(updatedTypes, schemaActions);
+    setNewResourceType("");
+    setNotice(`Resource type "${trimmed}" added.`);
+  }
+
+  async function removeResourceType(typeName: string) {
+    const updatedTypes = schemaEntityTypes.filter(t => t !== typeName);
+    await updateSchemaWithTypesAndActions(updatedTypes, schemaActions);
+    setNotice(`Resource type "${typeName}" removed.`);
+  }
+
+  async function addAction() {
+    const trimmed = newAction.trim();
+    if (!trimmed) return;
+    if (schemaActions.includes(trimmed)) {
+      setError(`Action "${trimmed}" already exists.`);
+      return;
+    }
+    const updatedActions = [...schemaActions, trimmed];
+    await updateSchemaWithTypesAndActions(schemaEntityTypes, updatedActions);
+    setNewAction("");
+    setNotice(`Action "${trimmed}" added.`);
+  }
+
+  async function removeAction(actionName: string) {
+    const updatedActions = schemaActions.filter(a => a !== actionName);
+    await updateSchemaWithTypesAndActions(schemaEntityTypes, updatedActions);
+    setNotice(`Action "${actionName}" removed.`);
+  }
+
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
       <Typography.Title level={2} style={{ margin: 0 }}>
@@ -480,6 +589,145 @@ export default function ApplicationDetails() {
             ),
           }}
         />
+      </Card>
+
+      {/* Resource Types & Actions Manager */}
+      <Card
+        title="Resource Types & Actions"
+        loading={loading || updatingSchema}
+        extra={
+          activeSchema ? (
+            <Tag color="green">Schema v{activeSchema.version} active</Tag>
+          ) : (
+            <Tag color="orange">No active schema</Tag>
+          )
+        }
+      >
+        <Space direction="vertical" size={16} style={{ width: "100%" }}>
+          <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
+            Define the resource types (entities) and actions for your application. These will be available in the Policy Template Wizard.
+          </Typography.Paragraph>
+
+          {/* Resource Types Section */}
+          <div>
+            <Typography.Text strong style={{ display: "block", marginBottom: 8 }}>
+              Resource Types
+            </Typography.Text>
+            <Space wrap style={{ marginBottom: 8 }}>
+              {schemaEntityTypes.length > 0 ? (
+                schemaEntityTypes.map((t) => (
+                  <Tag
+                    key={t}
+                    color="green"
+                    closable
+                    onClose={(e) => {
+                      e.preventDefault();
+                      removeResourceType(t);
+                    }}
+                    style={{ marginBottom: 4 }}
+                  >
+                    {t}
+                  </Tag>
+                ))
+              ) : (
+                <Typography.Text type="secondary">No resource types defined yet.</Typography.Text>
+              )}
+            </Space>
+            <Space.Compact style={{ width: "100%", maxWidth: 400 }}>
+              <Select
+                style={{ width: 180 }}
+                value={newResourceType || undefined}
+                onChange={setNewResourceType}
+                placeholder="Quick add..."
+                allowClear
+                options={commonTypes
+                  .filter((t) => !schemaEntityTypes.includes(t))
+                  .map((t) => ({ value: t, label: t }))}
+              />
+              <Input
+                style={{ flex: 1 }}
+                value={newResourceType}
+                onChange={(e) => setNewResourceType(e.target.value)}
+                placeholder="Or type custom (PascalCase)..."
+                onPressEnter={addResourceType}
+              />
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                onClick={addResourceType}
+                disabled={!newResourceType.trim() || updatingSchema}
+                loading={updatingSchema}
+              >
+                Add
+              </Button>
+            </Space.Compact>
+          </div>
+
+          {/* Actions Section */}
+          <div>
+            <Typography.Text strong style={{ display: "block", marginBottom: 8 }}>
+              Actions
+            </Typography.Text>
+            <Space wrap style={{ marginBottom: 8 }}>
+              {schemaActions.length > 0 ? (
+                schemaActions.map((a) => (
+                  <Tag
+                    key={a}
+                    color="purple"
+                    closable
+                    onClose={(e) => {
+                      e.preventDefault();
+                      removeAction(a);
+                    }}
+                    style={{ marginBottom: 4 }}
+                  >
+                    {a}
+                  </Tag>
+                ))
+              ) : (
+                <Typography.Text type="secondary">No actions defined yet.</Typography.Text>
+              )}
+            </Space>
+            <Space.Compact style={{ width: "100%", maxWidth: 400 }}>
+              <Select
+                style={{ width: 180 }}
+                value={newAction || undefined}
+                onChange={setNewAction}
+                placeholder="Quick add..."
+                allowClear
+                options={commonActions
+                  .filter((a) => !schemaActions.includes(a))
+                  .map((a) => ({ value: a, label: a }))}
+              />
+              <Input
+                style={{ flex: 1 }}
+                value={newAction}
+                onChange={(e) => setNewAction(e.target.value)}
+                placeholder="Or type custom (camelCase)..."
+                onPressEnter={addAction}
+              />
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                onClick={addAction}
+                disabled={!newAction.trim() || updatingSchema}
+                loading={updatingSchema}
+              >
+                Add
+              </Button>
+            </Space.Compact>
+          </div>
+
+          {/* Info about Policy Wizard integration */}
+          {(schemaEntityTypes.length > 0 || schemaActions.length > 0) && (
+            <Alert
+              type="info"
+              showIcon
+              message="Policy Wizard Integration"
+              description="These resource types and actions will be available as dropdown options when creating policies via the Template Wizard."
+            />
+          )}
+        </Space>
       </Card>
 
       {/* Access Simulator - Application Specific (Collapsible) */}
@@ -774,6 +1022,8 @@ permit (
         onSubmit={onPolicyWizardSubmit}
         saving={savingPolicy}
         approvalRequired={app?.approval_required}
+        entityTypes={schemaEntityTypes.length > 0 ? schemaEntityTypes : commonTypes}
+        actions={schemaActions.length > 0 ? schemaActions : commonActions}
       />
     </Space>
   );

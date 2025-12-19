@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { Alert, Button, Card, Checkbox, Col, Collapse, Input, Modal, Row, Select, Space, Table, Tabs, Tag, Typography, theme, message } from "antd";
 import { FileTextOutlined, PlusOutlined, ThunderboltOutlined, EyeOutlined, AppstoreOutlined, WifiOutlined, ExperimentOutlined } from "@ant-design/icons";
-import { api, type Application, type AuthorizeResponse, type CedarEntity, type PolicyDetails, type PolicySummary } from "../api";
+import { api, type Application, type AuthorizeResponse, type CedarEntity, type PolicyDetails, type PolicySummary, type Schema } from "../api";
 import PolicyDragDropBuilder from "../components/PolicyDragDropBuilder";
 import PolicyTemplateWizard from "../components/PolicyTemplateWizard";
 import PolicySimulator from "../components/PolicySimulator";
@@ -37,6 +37,8 @@ export default function Policies() {
 
   const [entities, setEntities] = useState<CedarEntity[]>([]);
   const [entitiesLoading, setEntitiesLoading] = useState(false);
+
+  const [activeSchema, setActiveSchema] = useState<Schema | null>(null);
 
   const [selectedAppId, setSelectedAppId] = useState<number | "">("");
   const [name, setName] = useState("");
@@ -129,6 +131,7 @@ export default function Policies() {
   useEffect(() => {
     if (selectedAppId === "") {
       setEntities([]);
+      setActiveSchema(null);
       return;
     }
 
@@ -143,16 +146,64 @@ export default function Policies() {
         setEntitiesLoading(false);
       }
     })();
+
+    // Fetch active schema to get entity types and actions
+    (async () => {
+      try {
+        const schema = await api.getActiveSchema(selectedAppId as number);
+        setActiveSchema(schema);
+      } catch (e) {
+        setActiveSchema(null);
+      }
+    })();
   }, [selectedAppId]);
 
+  // Parse entity types from both schema and actual entities
   const entityTypes = useMemo(() => {
     const set = new Set<string>();
+    
+    // Add types from actual entities
     const safeEntities = Array.isArray(entities) ? entities : [];
     for (const e of safeEntities) {
       if (e?.uid?.type) set.add(e.uid.type);
     }
+    
+    // Add types from active schema
+    if (activeSchema?.schema_text) {
+      try {
+        const parsed = JSON.parse(activeSchema.schema_text);
+        // Cedar schema format: { "": { entityTypes: {...}, actions: {...} } }
+        const namespace = parsed[""] || parsed;
+        if (namespace?.entityTypes) {
+          for (const typeName of Object.keys(namespace.entityTypes)) {
+            set.add(typeName);
+          }
+        }
+      } catch (e) {
+        // Ignore parse errors
+      }
+    }
+    
     return Array.from(set).sort();
-  }, [entities]);
+  }, [entities, activeSchema]);
+
+  // Parse actions from active schema
+  const schemaActions = useMemo(() => {
+    if (!activeSchema?.schema_text) return [];
+    
+    try {
+      const parsed = JSON.parse(activeSchema.schema_text);
+      // Cedar schema format: { "": { entityTypes: {...}, actions: {...} } }
+      const namespace = parsed[""] || parsed;
+      if (namespace?.actions) {
+        return Object.keys(namespace.actions).sort();
+      }
+    } catch (e) {
+      // Ignore parse errors
+    }
+    
+    return [];
+  }, [activeSchema]);
 
   const entityIdsByType = useMemo(() => {
     const map = new Map<string, string[]>();
@@ -826,7 +877,7 @@ export default function Policies() {
         saving={savingPolicy}
         approvalRequired={selectedApp?.approval_required}
         entityTypes={entityTypes}
-        actions={[]}
+        actions={schemaActions}
       />
 
       {/* Policy Simulator */}

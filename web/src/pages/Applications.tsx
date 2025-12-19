@@ -37,6 +37,9 @@ export default function Applications() {
   const selectedApp = useMemo(() => apps.find((a) => a.id === selectedAppId), [apps, selectedAppId]);
   const selectedNamespace = useMemo(() => namespaces.find((n) => n.id === selectedNamespaceId), [namespaces, selectedNamespaceId]);
 
+  // Control which collapse panels are open
+  const [activeCollapseKeys, setActiveCollapseKeys] = useState<string[]>([]);
+
   async function refresh() {
     setLoading(true);
     setError("");
@@ -154,7 +157,13 @@ export default function Applications() {
             title="Registered Applications" 
             loading={loading}
             extra={
-              <Button type="primary" icon={<PlusOutlined />} onClick={() => document.getElementById("create-app-section")?.scrollIntoView({ behavior: "smooth" })}>
+                <Button type="primary" icon={<PlusOutlined />} onClick={() => {
+                  // Expand the create section and scroll to it
+                  setActiveCollapseKeys(prev => prev.includes("create") ? prev : [...prev, "create"]);
+                  setTimeout(() => {
+                    document.getElementById("create-app-section")?.scrollIntoView({ behavior: "smooth" });
+                  }, 100);
+                }}>
                 New Application
               </Button>
             }
@@ -243,6 +252,14 @@ export default function Applications() {
           {/* Create Application (Collapsible) */}
           <div id="create-app-section" style={{ marginTop: 16 }}>
             <Collapse
+              activeKey={activeCollapseKeys.filter(k => k === "create")}
+              onChange={(keys) => {
+                const keysArr = Array.isArray(keys) ? keys : [keys];
+                setActiveCollapseKeys(prev => {
+                  const otherKeys = prev.filter(k => k !== "create");
+                  return keysArr.includes("create") ? [...otherKeys, "create"] : otherKeys;
+                });
+              }}
               items={[
                 {
                   key: "create",

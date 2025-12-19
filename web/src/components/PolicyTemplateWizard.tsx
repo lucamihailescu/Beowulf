@@ -56,8 +56,8 @@ type PolicyTemplateWizardProps = {
   onSubmit: (name: string, description: string, policyText: string, activate: boolean) => Promise<void>;
   saving: boolean;
   approvalRequired?: boolean;
-  entityTypes?: string[];
-  actions?: string[];
+  entityTypes: string[];
+  actions: string[];
 };
 
 const POLICY_TEMPLATES: PolicyTemplate[] = [
@@ -698,6 +698,8 @@ export default function PolicyTemplateWizard({
   onSubmit,
   saving,
   approvalRequired,
+  entityTypes = [],
+  actions = [],
 }: PolicyTemplateWizardProps) {
   const [step, setStep] = useState(0);
   const [selectedTemplate, setSelectedTemplate] = useState<PolicyTemplate | null>(null);
@@ -853,6 +855,37 @@ export default function PolicyTemplateWizard({
             description="Fill in the values below to customize the policy template."
           />
 
+          {(entityTypes.length > 0 || actions.length > 0) && (
+            <Alert
+              type="success"
+              showIcon
+              message="Schema Detected"
+              description={
+                <Space direction="vertical" size={4}>
+                  {entityTypes.length > 0 && (
+                    <span>
+                      <strong>Resource Types:</strong>{" "}
+                      {entityTypes.slice(0, 5).map((t) => (
+                        <Tag key={t} color="green" style={{ marginBottom: 2 }}>{t}</Tag>
+                      ))}
+                      {entityTypes.length > 5 && <Tag color="default">+{entityTypes.length - 5} more</Tag>}
+                    </span>
+                  )}
+                  {actions.length > 0 && (
+                    <span>
+                      <strong>Actions:</strong>{" "}
+                      {actions.slice(0, 5).map((a) => (
+                        <Tag key={a} color="purple" style={{ marginBottom: 2 }}>{a}</Tag>
+                      ))}
+                      {actions.length > 5 && <Tag color="default">+{actions.length - 5} more</Tag>}
+                    </span>
+                  )}
+                </Space>
+              }
+              style={{ marginBottom: 8 }}
+            />
+          )}
+
           {selectedTemplate.variables.map((variable) => (
             <div key={variable.key}>
               <Space style={{ marginBottom: 4 }}>
@@ -871,13 +904,100 @@ export default function PolicyTemplateWizard({
                 {variable.description}
               </Typography.Paragraph>
               {variable.type === "text" && (
-                <Input
-                  value={variableValues[variable.key] || ""}
-                  onChange={(e) =>
-                    setVariableValues({ ...variableValues, [variable.key]: e.target.value })
-                  }
-                  placeholder={variable.placeholder}
-                />
+                <>
+                  {/* Show dropdown for resourceType if schema has entity types */}
+                  {variable.key === "resourceType" && entityTypes.length > 0 ? (
+                    <Select
+                      style={{ width: "100%" }}
+                      allowClear
+                      showSearch
+                      value={variableValues[variable.key] || undefined}
+                      onChange={(v) => setVariableValues({ ...variableValues, [variable.key]: v || "" })}
+                      placeholder="Select from schema or type custom..."
+                      options={entityTypes.map(t => ({ value: t, label: t }))}
+                      dropdownRender={(menu) => (
+                        <>
+                          {menu}
+                          <div style={{ padding: 8, borderTop: "1px solid #f0f0f0" }}>
+                            <Input
+                              size="small"
+                              placeholder="Or enter custom type..."
+                              value={variableValues[variable.key] || ""}
+                              onChange={(e) => setVariableValues({ ...variableValues, [variable.key]: e.target.value })}
+                            />
+                          </div>
+                        </>
+                      )}
+                    />
+                  ) : variable.key === "actions" && actions.length > 0 ? (
+                    /* Show multi-select for actions if schema has actions */
+                    <Select
+                      mode="tags"
+                      style={{ width: "100%" }}
+                      value={variableValues[variable.key]?.split(",").map(a => a.trim()).filter(Boolean) || []}
+                      onChange={(values) => setVariableValues({ ...variableValues, [variable.key]: values.join(", ") })}
+                      placeholder="Select actions from schema..."
+                      options={actions.map(a => ({ value: a, label: a }))}
+                    />
+                  ) : variable.key === "action" && actions.length > 0 ? (
+                    /* Single action selection */
+                    <Select
+                      style={{ width: "100%" }}
+                      allowClear
+                      showSearch
+                      value={variableValues[variable.key] || undefined}
+                      onChange={(v) => setVariableValues({ ...variableValues, [variable.key]: v || "" })}
+                      placeholder="Select action from schema..."
+                      options={actions.map(a => ({ value: a, label: a }))}
+                      dropdownRender={(menu) => (
+                        <>
+                          {menu}
+                          <div style={{ padding: 8, borderTop: "1px solid #f0f0f0" }}>
+                            <Input
+                              size="small"
+                              placeholder="Or enter custom action..."
+                              value={variableValues[variable.key] || ""}
+                              onChange={(e) => setVariableValues({ ...variableValues, [variable.key]: e.target.value })}
+                            />
+                          </div>
+                        </>
+                      )}
+                    />
+                  ) : variable.key === "containerType" && entityTypes.length > 0 ? (
+                    /* Container type selection from entity types */
+                    <Select
+                      style={{ width: "100%" }}
+                      allowClear
+                      showSearch
+                      value={variableValues[variable.key] || undefined}
+                      onChange={(v) => setVariableValues({ ...variableValues, [variable.key]: v || "" })}
+                      placeholder="Select container type..."
+                      options={entityTypes.map(t => ({ value: t, label: t }))}
+                      dropdownRender={(menu) => (
+                        <>
+                          {menu}
+                          <div style={{ padding: 8, borderTop: "1px solid #f0f0f0" }}>
+                            <Input
+                              size="small"
+                              placeholder="Or enter custom type..."
+                              value={variableValues[variable.key] || ""}
+                              onChange={(e) => setVariableValues({ ...variableValues, [variable.key]: e.target.value })}
+                            />
+                          </div>
+                        </>
+                      )}
+                    />
+                  ) : (
+                    /* Default text input */
+                    <Input
+                      value={variableValues[variable.key] || ""}
+                      onChange={(e) =>
+                        setVariableValues({ ...variableValues, [variable.key]: e.target.value })
+                      }
+                      placeholder={variable.placeholder}
+                    />
+                  )}
+                </>
               )}
               {variable.type === "select" && variable.options && (
                 <Select
