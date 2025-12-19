@@ -70,6 +70,8 @@ const MSALAuthContent: React.FC<{ children: React.ReactNode }> = ({ children }) 
   // Loading is true while MSAL is processing (e.g., handling redirect)
   const isLoading = inProgress !== InteractionStatus.None;
 
+  const sessionLogged = useRef(false);
+
   useEffect(() => {
     if (isAuthenticated && accounts.length > 0) {
       const account = accounts[0];
@@ -79,8 +81,25 @@ const MSALAuthContent: React.FC<{ children: React.ReactNode }> = ({ children }) 
         email: account.username || '',
         groups: [],
       });
+
+      // Log session to audit trail (only once per session)
+      if (!sessionLogged.current) {
+        sessionLogged.current = true;
+        // Delay slightly to ensure token is available
+        setTimeout(async () => {
+          try {
+            const token = await tokenGetterRef.current();
+            if (token) {
+              await api.getSession();
+            }
+          } catch (e) {
+            console.warn('Failed to log session:', e);
+          }
+        }, 500);
+      }
     } else {
       setUser(null);
+      sessionLogged.current = false;
     }
   }, [isAuthenticated, accounts]);
 

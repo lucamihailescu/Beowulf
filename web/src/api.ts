@@ -317,6 +317,15 @@ export type LDAPAuthResponse = {
   };
 };
 
+export type SessionInfo = {
+  user_id: string;
+  name: string;
+  email: string;
+  groups: string[];
+  auth_type: "entra" | "ldap" | "kerberos" | "anonymous";
+  logged_in: boolean;
+};
+
 // Settings types
 export type EntraSettings = {
   tenant_id: string;
@@ -801,6 +810,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify(credentials),
     });
+  },
+
+  // Get session info and log login event
+  getSession(): Promise<SessionInfo> {
+    return request<SessionInfo>("/v1/auth/session");
   },
 
   // Settings endpoints

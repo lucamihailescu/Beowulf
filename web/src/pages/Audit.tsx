@@ -67,8 +67,17 @@ export default function Audit() {
       "entity.upsert": "cyan",
       "schema.create": "orange",
       "schema.activate": "gold",
+      "auth.entra.login": "green",
+      "auth.ldap.login": "green",
+      "auth.kerberos.login": "green",
     };
-    return <Tag color={colors[action] || "default"}>{action}</Tag>;
+    // Display friendly names for login events
+    const displayNames: Record<string, string> = {
+      "auth.entra.login": "Login (Entra)",
+      "auth.ldap.login": "Login (LDAP)",
+      "auth.kerberos.login": "Login (Kerberos)",
+    };
+    return <Tag color={colors[action] || "default"}>{displayNames[action] || action}</Tag>;
   }
 
   function formatContext(ctx: Record<string, unknown> | undefined) {
@@ -133,11 +142,14 @@ export default function Audit() {
 
   const actionOptions = [
     { value: "", label: "All actions" },
-    { value: "authorize", label: "authorize" },
-    { value: "policy.create", label: "policy.create" },
-    { value: "entity.upsert", label: "entity.upsert" },
-    { value: "schema.create", label: "schema.create" },
-    { value: "schema.activate", label: "schema.activate" },
+    { value: "authorize", label: "Authorization" },
+    { value: "auth.entra.login", label: "Login (Entra)" },
+    { value: "auth.ldap.login", label: "Login (LDAP)" },
+    { value: "auth.kerberos.login", label: "Login (Kerberos)" },
+    { value: "policy.create", label: "Policy Created" },
+    { value: "entity.upsert", label: "Entity Updated" },
+    { value: "schema.create", label: "Schema Created" },
+    { value: "schema.activate", label: "Schema Activated" },
   ];
 
   const decisionOptions = [

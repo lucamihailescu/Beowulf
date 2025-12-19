@@ -510,3 +510,81 @@ func adConfigToLDAPConfig(config *storage.ADConfig) *ldap.Config {
 		Configured:          config.Configured,
 	}
 }
+
+// SessionInfo represents the current user session.
+type SessionInfo struct {
+	UserID    string   `json:"user_id"`
+	Name      string   `json:"name"`
+	Email     string   `json:"email"`
+	Groups    []string `json:"groups"`
+	AuthType  string   `json:"auth_type"` // "entra", "ldap", "kerberos", "anonymous"
+	LoggedIn  bool     `json:"logged_in"`
+}
+
+// handleGetSession returns the current user's session info and logs the login event.
+// This endpoint should be called by the frontend after successful authentication.
+func (a *API) handleGetSession(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := GetUserFromContext(ctx)
+
+	if user == nil || user.ID == "" || user.ID == "anonymous" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(SessionInfo{
+			LoggedIn: false,
+			AuthType: "anonymous",
+		})
+		return
+	}
+
+	// Determine auth type based on token issuer or user context
+	authType := "unknown"
+	if r.Header.Get("Authorization") != "" {
+		// Check if it's an Entra token or LDAP token based on claims
+		token := ExtractBearerToken(r)
+		if token != "" {
+			// Simple heuristic: LDAP tokens have "cedar-ldap" issuer
+			claims := jwt.MapClaims{}
+			parser := jwt.NewParser()
+			parsedToken, _, _ := parser.ParseUnverified(token, claims)
+			if parsedToken != nil {
+				if iss, ok := claims["iss"].(string); ok {
+					if iss == "cedar-ldap" {
+						authType = "ldap"
+					} else if iss != "" && (iss == "https://login.microsoftonline.com" || 
+					           (len(iss) > 30 && iss[:30] == "https://login.microsoftonline")) ||
+					           (len(iss) > 25 && iss[:25] == "https://sts.windows.net/") {
+						authType = "entra"
+					}
+				}
+			}
+		}
+	}
+	if authType == "unknown" && user.ID != "" {
+		authType = "entra" // Default for authenticated users
+	}
+
+	// Log the login event (only log if we haven't seen this session recently)
+	// Use a simple approach: always log, deduplication can be done at query time
+	if a.audits != nil {
+		auditCtx := map[string]interface{}{
+			"user_id":   user.ID,
+			"name":      user.Name,
+			"email":     user.Email,
+			"auth_type": authType,
+		}
+		if len(user.Groups) > 0 {
+			auditCtx["groups"] = user.Groups
+		}
+		_ = a.audits.Log(ctx, nil, user.ID, "auth."+authType+".login", "", "", auditCtx)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(SessionInfo{
+		UserID:   user.ID,
+		Name:     user.Name,
+		Email:    user.Email,
+		Groups:   user.Groups,
+		AuthType: authType,
+		LoggedIn: true,
+	})
+}

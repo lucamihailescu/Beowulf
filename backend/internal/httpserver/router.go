@@ -412,6 +412,9 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 	// LDAP authentication endpoint
 	r.Post("/v1/auth/ldap", api.handleLDAPAuth)
 
+	// Session endpoint - logs login events and returns user info
+	r.Get("/v1/auth/session", api.handleGetSession)
+
 	r.Route("/v1/audit", func(r chi.Router) {
 		r.Get("/", api.handleListAuditLogs)
 	})
