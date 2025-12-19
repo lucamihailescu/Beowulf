@@ -95,3 +95,4 @@ type AuthResult struct {
 	Error   string `json:"error,omitempty"`
 }
 
+
