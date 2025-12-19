@@ -12,6 +12,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	"cedar/internal/config"
+	"cedar/internal/storage"
 )
 
 // UserContext contains authenticated user information.
@@ -49,7 +50,8 @@ type AuthMiddleware struct {
 }
 
 // NewAuthMiddleware creates a new authentication middleware.
-func NewAuthMiddleware(cfg config.Config) (*AuthMiddleware, error) {
+// It first checks the database for auth settings (Entra/AD), then falls back to environment variables.
+func NewAuthMiddleware(cfg config.Config, settings *storage.SettingsRepo) (*AuthMiddleware, error) {
 	am := &AuthMiddleware{
 		mode:   strings.ToLower(cfg.AuthMode),
 		apiKey: cfg.APIKey,
@@ -62,22 +64,58 @@ func NewAuthMiddleware(cfg config.Config) (*AuthMiddleware, error) {
 	}
 	am.ldapSignKey = ldapKey
 
+	// Check database for auth settings - these override environment variables
+	if settings != nil {
+		ctx := context.Background()
+
+		// Check for Entra configuration in database
+		if entraConfig, err := settings.GetEntraConfig(ctx); err == nil && entraConfig != nil {
+			if entraConfig.AuthEnabled && entraConfig.Configured {
+				log.Println("Entra authentication enabled from database settings")
+				am.mode = "jwt"
+				am.jwtValidator = NewJWTValidator(entraConfig.TenantID, entraConfig.ClientID, entraConfig.ClientID)
+			}
+		}
+
+		// Check for AD configuration in database (AD takes precedence if both are enabled)
+		if adConfig, err := settings.GetADConfig(ctx); err == nil && adConfig != nil && adConfig.Enabled && adConfig.Configured {
+			log.Println("Active Directory authentication enabled from database settings")
+			if adConfig.KerberosEnabled && adConfig.KerberosKeytab != "" && adConfig.KerberosService != "" {
+				am.mode = "ldap+kerberos"
+				kv, err := NewKerberosValidator(adConfig.KerberosKeytab, adConfig.KerberosService)
+				if err != nil {
+					log.Printf("Warning: Failed to initialize Kerberos validator from database: %v", err)
+				} else {
+					am.kerbValidator = kv
+				}
+			} else {
+				am.mode = "ldap"
+			}
+		}
+	}
+
+	// If no database settings, use environment variables
 	switch am.mode {
 	case "jwt":
-		if cfg.AzureTenantID == "" || cfg.AzureClientID == "" {
-			log.Println("Warning: JWT auth mode requires AZURE_TENANT_ID and AZURE_CLIENT_ID")
+		// Only initialize from env if not already set from database
+		if am.jwtValidator == nil {
+			if cfg.AzureTenantID == "" || cfg.AzureClientID == "" {
+				log.Println("Warning: JWT auth mode requires AZURE_TENANT_ID and AZURE_CLIENT_ID")
+			}
+			am.jwtValidator = NewJWTValidator(cfg.AzureTenantID, cfg.AzureClientID, cfg.AzureAudience)
 		}
-		am.jwtValidator = NewJWTValidator(cfg.AzureTenantID, cfg.AzureClientID, cfg.AzureAudience)
 
 	case "kerberos":
-		if cfg.KerberosKeytab == "" || cfg.KerberosService == "" {
-			log.Println("Warning: Kerberos auth mode requires KERBEROS_KEYTAB and KERBEROS_SERVICE")
-		} else {
-			kv, err := NewKerberosValidator(cfg.KerberosKeytab, cfg.KerberosService)
-			if err != nil {
-				log.Printf("Warning: Failed to initialize Kerberos validator: %v", err)
+		if am.kerbValidator == nil {
+			if cfg.KerberosKeytab == "" || cfg.KerberosService == "" {
+				log.Println("Warning: Kerberos auth mode requires KERBEROS_KEYTAB and KERBEROS_SERVICE")
 			} else {
-				am.kerbValidator = kv
+				kv, err := NewKerberosValidator(cfg.KerberosKeytab, cfg.KerberosService)
+				if err != nil {
+					log.Printf("Warning: Failed to initialize Kerberos validator: %v", err)
+				} else {
+					am.kerbValidator = kv
+				}
 			}
 		}
 
@@ -86,7 +124,7 @@ func NewAuthMiddleware(cfg config.Config) (*AuthMiddleware, error) {
 
 	case "ldap+kerberos":
 		log.Println("LDAP+Kerberos authentication enabled")
-		if cfg.KerberosKeytab != "" && cfg.KerberosService != "" {
+		if am.kerbValidator == nil && cfg.KerberosKeytab != "" && cfg.KerberosService != "" {
 			kv, err := NewKerberosValidator(cfg.KerberosKeytab, cfg.KerberosService)
 			if err != nil {
 				log.Printf("Warning: Failed to initialize Kerberos validator: %v", err)
@@ -109,9 +147,34 @@ func NewAuthMiddleware(cfg config.Config) (*AuthMiddleware, error) {
 // Middleware returns an http.Handler middleware that performs authentication.
 func (am *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Skip auth for health check
-		if r.URL.Path == "/health" || r.URL.Path == "/healthz" {
+		// Skip auth for health check and internal cluster endpoints
+		path := r.URL.Path
+		if path == "/health" || path == "/healthz" {
 			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Skip auth for cluster management, SSE, settings, auth config, and identity provider endpoints
+		// These are needed for: load-balancer, backend registration, dashboard, and initial setup
+		if strings.HasPrefix(path, "/v1/cluster/") || 
+		   strings.HasPrefix(path, "/v1/settings/") || 
+		   strings.HasPrefix(path, "/v1/auth/") ||
+		   path == "/v1/events" ||
+		   path == "/v1/identity-provider" {
+			// Allow anonymous access but still try to extract user if token present
+			if am.mode != "none" && am.mode != "" {
+				if user := am.tryExtractUser(r); user != nil {
+					ctx := context.WithValue(r.Context(), UserContextKey, user)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+			}
+			// No token or auth disabled - use anonymous
+			ctx := context.WithValue(r.Context(), UserContextKey, &UserContext{
+				ID:   "anonymous",
+				Name: "Anonymous User",
+			})
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 
@@ -193,6 +256,28 @@ func (am *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 	})
 }
 
+// tryExtractUser attempts to extract user from token without requiring authentication.
+// Returns nil if no valid token is present.
+func (am *AuthMiddleware) tryExtractUser(r *http.Request) *UserContext {
+	var user *UserContext
+
+	switch am.mode {
+	case "jwt":
+		user, _ = am.validateJWT(r)
+	case "ldap":
+		user, _ = am.validateLDAPToken(r)
+	case "ldap+kerberos":
+		user, _ = am.validateKerberos(r)
+		if user == nil {
+			user, _ = am.validateLDAPToken(r)
+		}
+	case "kerberos":
+		user, _ = am.validateKerberos(r)
+	}
+
+	return user
+}
+
 // validateJWT validates a JWT Bearer token.
 func (am *AuthMiddleware) validateJWT(r *http.Request) (*UserContext, error) {
 	token := ExtractBearerToken(r)
@@ -249,9 +334,17 @@ func (am *AuthMiddleware) validateLDAPToken(r *http.Request) (*UserContext, erro
 			return nil, nil // Not an LDAP token, let other validators try
 		}
 
-		// Extract user info
+		// Extract user info - prefer UPN for user-friendly audit logs
+		userID := getClaimString(claims, "upn") // UserPrincipalName (e.g., user@domain.com)
+		if userID == "" {
+			userID = getClaimString(claims, "email")
+		}
+		if userID == "" {
+			userID = getClaimString(claims, "sub") // Fall back to SAMAccountName
+		}
+
 		user := &UserContext{
-			ID:    getClaimString(claims, "sub"),
+			ID:    userID,
 			Name:  getClaimString(claims, "name"),
 			Email: getClaimString(claims, "email"),
 		}

@@ -39,41 +39,54 @@ export const getIdentityProvider = (): IdentityProvider | null => identityProvid
 
 // Get effective config values
 const getEffectiveConfig = () => {
+  // ALWAYS use current window origin as redirect URI to avoid mismatch errors
+  // The user may access the app from different URLs (localhost:5173, localhost:8080, etc.)
+  const currentOrigin = window.location.origin;
+  
   if (dynamicConfig?.enabled) {
     return {
       tenantId: dynamicConfig.tenant_id || '',
       clientId: dynamicConfig.client_id || '',
-      redirectUri: dynamicConfig.redirect_uri || window.location.origin,
+      redirectUri: currentOrigin,
       authority: dynamicConfig.authority || `https://login.microsoftonline.com/${dynamicConfig.tenant_id}`,
     };
   }
   return {
     tenantId: envTenantId,
     clientId: envClientId,
-    redirectUri: envRedirectUri,
+    redirectUri: currentOrigin,
     authority: `https://login.microsoftonline.com/${envTenantId}`,
   };
 };
 
 // Check if auth is enabled (either via env or dynamic config)
 export const isAuthEnabled = (): boolean => {
-  // If AD is enabled, auth is enabled
+  // Check env var first
+  if (envAuthMode !== 'none' && envAuthMode !== '') {
+    return true;
+  }
+  // Check if AD is enabled via database
   if (identityProvider?.provider === 'ad') {
     return true;
   }
-  // If Entra is enabled, auth is enabled
-  if (identityProvider?.provider === 'entra' || dynamicConfig?.enabled) {
+  // Check if Entra is enabled via database
+  if (identityProvider?.provider === 'entra' && dynamicConfig?.enabled) {
     return true;
   }
-  return envAuthMode !== 'none' && envAuthMode !== '';
+  return false;
 };
 
 // Check if we're using JWT/Entra ID auth
 export const isJWTAuth = (): boolean => {
-  if (identityProvider?.provider === 'entra' || dynamicConfig?.enabled) {
+  // Check env var
+  if (envAuthMode === 'jwt') {
     return true;
   }
-  return envAuthMode === 'jwt';
+  // Check database config
+  if (identityProvider?.provider === 'entra' && dynamicConfig?.enabled) {
+    return true;
+  }
+  return false;
 };
 
 // Check if we're using Kerberos auth
@@ -82,10 +95,7 @@ export const isKerberosAuth = (): boolean => {
   if (identityProvider?.provider === 'ad' && identityProvider?.auth_method === 'ldap+kerberos') {
     return true;
   }
-  if (dynamicConfig?.enabled) {
-    return false; // Dynamic Entra config overrides to Entra
-  }
-  return envAuthMode === 'kerberos';
+  return envAuthMode === 'kerberos' || envAuthMode === 'ldap+kerberos';
 };
 
 // Check if we're using LDAP auth
@@ -109,10 +119,12 @@ export const createMsalConfig = (): Configuration => {
       navigateToLoginRequestUrl: true,
     },
     cache: {
-      cacheLocation: 'sessionStorage',
-      storeAuthStateInCookie: false,
+      cacheLocation: 'localStorage', // Use localStorage for better persistence
+      storeAuthStateInCookie: true,  // Fixes loop issues in many browsers
     },
     system: {
+      iframeHashTimeout: 10000,
+      windowHashTimeout: 10000,
       loggerOptions: {
         loggerCallback: (level, message, containsPii) => {
           if (containsPii) return;
@@ -137,15 +149,17 @@ export const msalConfig: Configuration = {
   auth: {
     clientId: envClientId,
     authority: `https://login.microsoftonline.com/${envTenantId}`,
-    redirectUri: envRedirectUri,
-    postLogoutRedirectUri: envRedirectUri,
+    redirectUri: window.location.origin,
+    postLogoutRedirectUri: window.location.origin,
     navigateToLoginRequestUrl: true,
   },
   cache: {
-    cacheLocation: 'sessionStorage',
-    storeAuthStateInCookie: false,
+    cacheLocation: 'localStorage',
+    storeAuthStateInCookie: true,
   },
   system: {
+    iframeHashTimeout: 10000,
+    windowHashTimeout: 10000,
     loggerOptions: {
       loggerCallback: (level, message, containsPii) => {
         if (containsPii) return;

@@ -293,8 +293,8 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
 
-	// Initialize auth middleware
-	authMiddleware, err := NewAuthMiddleware(cfg)
+	// Initialize auth middleware (reads auth settings from database first, then falls back to env vars)
+	authMiddleware, err := NewAuthMiddleware(cfg, settings)
 	if err != nil {
 		panic("failed to create auth middleware: " + err.Error())
 	}

@@ -2,8 +2,8 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import {
   PublicClientApplication,
   AccountInfo,
-  InteractionRequiredAuthError,
   AuthenticationResult,
+  InteractionStatus,
 } from '@azure/msal-browser';
 import { MsalProvider, useMsal, useIsAuthenticated } from '@azure/msal-react';
 import { createMsalConfig, loginRequest, isAuthEnabled, isJWTAuth, isKerberosAuth, isLDAPAuth, fetchAuthConfig, getIdentityProvider } from './msalConfig';
@@ -60,11 +60,15 @@ const initializeMsal = async (): Promise<PublicClientApplication> => {
 
 // MSAL Auth Provider (for JWT mode)
 const MSALAuthContent: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { instance, accounts } = useMsal();
+  const { instance, accounts, inProgress } = useMsal();
   const isAuthenticated = useIsAuthenticated();
   const [user, setUser] = useState<UserInfo | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const tokenGetterRef = useRef<() => Promise<string | null>>(() => Promise.resolve(null));
+  const loginRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const apiConfigured = useRef(false);
+
+  // Loading is true while MSAL is processing (e.g., handling redirect)
+  const isLoading = inProgress !== InteractionStatus.None;
 
   useEffect(() => {
     if (isAuthenticated && accounts.length > 0) {
@@ -78,7 +82,6 @@ const MSALAuthContent: React.FC<{ children: React.ReactNode }> = ({ children }) 
     } else {
       setUser(null);
     }
-    setIsLoading(false);
   }, [isAuthenticated, accounts]);
 
   const login = useCallback(async () => {
@@ -112,28 +115,37 @@ const MSALAuthContent: React.FC<{ children: React.ReactNode }> = ({ children }) 
         ...loginRequest,
         account,
       });
-      return response.accessToken;
+      // Use ID token for our backend API (has client_id as audience)
+      // Access token is for Microsoft Graph API (has graph.microsoft.com as audience)
+      return response.idToken || response.accessToken;
     } catch (error) {
-      if (error instanceof InteractionRequiredAuthError) {
-        // Silent token acquisition failed, need interactive login
-        await instance.acquireTokenRedirect(loginRequest);
-        return null;
-      }
-      console.error('Token acquisition failed:', error);
+      // NOTE: Do NOT automatically redirect here. This causes infinite loops if the silent request fails
+      // (e.g. due to browser blocking 3rd party cookies or extensions like password managers interfering).
+      // Instead, return null and let the API layer handle the 401 response by calling onAuthError if needed.
+      console.warn('Silent token acquisition failed:', error);
       return null;
     }
   }, [instance, accounts, isAuthenticated]);
 
-  // Configure API client with token getter
+  // Keep refs updated with latest functions
+  useEffect(() => {
+    tokenGetterRef.current = getAccessToken;
+  }, [getAccessToken]);
+
+  useEffect(() => {
+    loginRef.current = login;
+  }, [login]);
+
+  // Configure API client once with stable wrapper functions
   useEffect(() => {
     if (!apiConfigured.current) {
       configureAuth({
-        getToken: getAccessToken,
-        onAuthError: login,
+        getToken: () => tokenGetterRef.current(),
+        onAuthError: () => loginRef.current(),
       });
       apiConfigured.current = true;
     }
-  }, [getAccessToken, login]);
+  }, []);
 
   const contextValue = useMemo(
     () => ({
@@ -300,7 +312,7 @@ const LDAPAuthContent: React.FC<{ children: React.ReactNode }> = ({ children }) 
     return sessionStorage.getItem(LDAP_TOKEN_KEY);
   }, []);
 
-  // Configure API client with token getter
+  // Configure API client once - token getter reads from sessionStorage which is always current
   useEffect(() => {
     if (!apiConfigured.current) {
       configureAuth({

@@ -567,10 +567,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   // Handle authentication errors
+  // NOTE: We do NOT automatically trigger onAuthError here because it can cause redirect loops
+  // when MSAL is still processing the auth response. Instead, we just throw the error and
+  // let the UI handle it (show login button, error message, etc.)
   if (res.status === 401) {
-    if (onAuthError) {
-      onAuthError();
-    }
     throw new Error('Authentication required. Please sign in.');
   }
 

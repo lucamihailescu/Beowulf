@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/big"
 	"net/http"
 	"strings"
@@ -91,23 +92,29 @@ func (v *JWTValidator) ValidateToken(ctx context.Context, tokenString string) (*
 		return nil, fmt.Errorf("invalid claims type")
 	}
 
-	// Validate issuer
-	if claims.Issuer != v.issuer {
-		return nil, fmt.Errorf("invalid issuer: expected %s, got %s", v.issuer, claims.Issuer)
+	// Validate issuer - accept both v2.0 and v1.0 formats
+	expectedIssuerV2 := v.issuer
+	expectedIssuerV1 := fmt.Sprintf("https://sts.windows.net/%s/", v.tenantID)
+	if claims.Issuer != expectedIssuerV2 && claims.Issuer != expectedIssuerV1 {
+		log.Printf("JWT validation: invalid issuer - expected %s or %s, got %s", expectedIssuerV2, expectedIssuerV1, claims.Issuer)
+		return nil, fmt.Errorf("invalid issuer: expected %s or %s, got %s", expectedIssuerV2, expectedIssuerV1, claims.Issuer)
 	}
 
-	// Validate audience
-	if v.audience != "" {
-		validAudience := false
-		for _, aud := range claims.Audience {
-			if aud == v.audience || aud == v.clientID {
-				validAudience = true
-				break
-			}
+	// Validate audience - accept client ID as audience (for ID tokens)
+	validAudience := false
+	for _, aud := range claims.Audience {
+		if aud == v.clientID {
+			validAudience = true
+			break
 		}
-		if !validAudience {
-			return nil, fmt.Errorf("invalid audience")
+		if v.audience != "" && aud == v.audience {
+			validAudience = true
+			break
 		}
+	}
+	if !validAudience {
+		log.Printf("JWT validation: invalid audience - expected %s or %s, got %v", v.clientID, v.audience, claims.Audience)
+		return nil, fmt.Errorf("invalid audience: expected %s, got %v", v.clientID, claims.Audience)
 	}
 
 	// Build user context

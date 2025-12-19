@@ -44,13 +44,22 @@ export function SSEProvider({ children, enabled = true }: SSEProviderProps) {
     });
   }, [entitySubscribers]);
 
-  // Use the SSE hook
+  // Stable callbacks for SSE connection events (prevents reconnection loops)
+  const handleConnect = useCallback(() => {
+    console.log('[SSEContext] Connected to SSE');
+  }, []);
+
+  const handleDisconnect = useCallback(() => {
+    console.log('[SSEContext] Disconnected from SSE');
+  }, []);
+
+  // Use the SSE hook with stable callbacks
   const sseState = useSSE({
     enabled,
     onPolicyUpdate: handlePolicyUpdate,
     onEntityUpdate: handleEntityUpdate,
-    onConnect: () => console.log('[SSEContext] Connected to SSE'),
-    onDisconnect: () => console.log('[SSEContext] Disconnected from SSE'),
+    onConnect: handleConnect,
+    onDisconnect: handleDisconnect,
   });
 
   // Subscribe to policy updates

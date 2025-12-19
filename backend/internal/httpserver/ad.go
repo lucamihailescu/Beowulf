@@ -443,9 +443,17 @@ func (a *API) validateLDAPToken(tokenString string) (*UserContext, error) {
 			return nil, fmt.Errorf("invalid token issuer")
 		}
 
-		// Extract user info
+		// Extract user info - prefer UPN for user-friendly audit logs
+		userID := getString(claims, "upn") // UserPrincipalName (e.g., user@domain.com)
+		if userID == "" {
+			userID = getString(claims, "email")
+		}
+		if userID == "" {
+			userID = getString(claims, "sub") // Fall back to SAMAccountName
+		}
+
 		user := &UserContext{
-			ID:    getString(claims, "sub"),
+			ID:    userID,
 			Name:  getString(claims, "name"),
 			Email: getString(claims, "email"),
 		}
