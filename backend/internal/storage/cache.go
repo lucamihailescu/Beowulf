@@ -67,12 +67,17 @@ func (c *Cache) startInvalidationListener() {
 			continue
 		}
 		c.local.Delete(c.keyActivePolicies(appID))
+		c.local.Delete(c.keyActivePolicySet(appID))
 		c.local.Delete(c.keyEntities(appID))
 	}
 }
 
 func (c *Cache) keyActivePolicies(appID int64) string {
 	return fmt.Sprintf("cedar:app:%d:active_policies", appID)
+}
+
+func (c *Cache) keyActivePolicySet(appID int64) string {
+	return fmt.Sprintf("cedar:app:%d:active_policy_set", appID)
 }
 
 func (c *Cache) keyEntities(appID int64) string {
@@ -88,6 +93,7 @@ func (c *Cache) InvalidateApp(ctx context.Context, appID int64) error {
 
 	// 1. Clear Local Cache (L1) immediately
 	c.local.Delete(c.keyActivePolicies(appID))
+	c.local.Delete(c.keyActivePolicySet(appID))
 	c.local.Delete(c.keyEntities(appID))
 
 	// 2. Clear Redis Cache (L2) & Publish Invalidation Event
@@ -155,6 +161,74 @@ func (p *CachedPolicyProvider) ActivePolicies(ctx context.Context, applicationID
 	p.cache.local.Set(key, policies, p.cache.localTTL)
 
 	return policies, nil
+}
+
+func (p *CachedPolicyProvider) ActivePolicySet(ctx context.Context, applicationID int64) (*cedar.PolicySet, error) {
+	if p.cache == nil || !p.cache.enabled() {
+		return p.base.ActivePolicySet(ctx, applicationID)
+	}
+
+	setKey := p.cache.keyActivePolicySet(applicationID)
+	textKey := p.cache.keyActivePolicies(applicationID)
+
+	// 1. Check L1 (Local Cache) for pre-parsed PolicySet
+	if val, found := p.cache.local.Get(setKey); found {
+		if ps, ok := val.(*cedar.PolicySet); ok {
+			setCacheSource(ctx, "L1")
+			return ps, nil
+		}
+	}
+
+	// 2. Check L2 (Redis Cache) for raw policy text
+	var policies []authz.PolicyText
+	if b, err := p.cache.rdb.Get(ctx, textKey).Bytes(); err == nil {
+		if jsonErr := json.Unmarshal(b, &policies); jsonErr == nil {
+			// Parse to PolicySet
+			ps := cedar.NewPolicySet()
+			for _, pText := range policies {
+				var policy cedar.Policy
+				if err := policy.UnmarshalCedar([]byte(pText.Text)); err != nil {
+					return nil, fmt.Errorf("parse policy %s: %w", pText.ID, err)
+				}
+				ps.Add(cedar.PolicyID(pText.ID), &policy)
+			}
+			// Populate L1
+			p.cache.local.Set(setKey, ps, p.cache.localTTL)
+			setCacheSource(ctx, "L2")
+			return ps, nil
+		}
+	} else if err != redis.Nil {
+		log.Printf("Redis get error: %v", err)
+	}
+
+	// 3. Fetch from DB (via base)
+	policies, err := p.base.ActivePolicies(ctx, applicationID)
+	if err != nil {
+		return nil, err
+	}
+	setCacheSource(ctx, "DB")
+
+	// Parse to PolicySet
+	ps := cedar.NewPolicySet()
+	for _, pText := range policies {
+		var policy cedar.Policy
+		if err := policy.UnmarshalCedar([]byte(pText.Text)); err != nil {
+			return nil, fmt.Errorf("parse policy %s: %w", pText.ID, err)
+		}
+		ps.Add(cedar.PolicyID(pText.ID), &policy)
+	}
+
+	// 4. Update L2 (Redis) - async
+	if b, err := json.Marshal(policies); err == nil {
+		go func() {
+			_ = p.cache.rdb.Set(context.Background(), textKey, b, p.cache.ttl).Err()
+		}()
+	}
+
+	// 5. Update L1 (Local)
+	p.cache.local.Set(setKey, ps, p.cache.localTTL)
+
+	return ps, nil
 }
 
 type CachedEntityProvider struct {

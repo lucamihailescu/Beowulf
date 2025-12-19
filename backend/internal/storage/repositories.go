@@ -379,6 +379,24 @@ func (r *PolicyRepo) ActivePolicies(ctx context.Context, applicationID int64) ([
 	return out, nil
 }
 
+// ActivePolicySet returns active policies as a pre-parsed cedar.PolicySet.
+func (r *PolicyRepo) ActivePolicySet(ctx context.Context, applicationID int64) (*cedar.PolicySet, error) {
+	policies, err := r.ActivePolicies(ctx, applicationID)
+	if err != nil {
+		return nil, err
+	}
+
+	ps := cedar.NewPolicySet()
+	for _, p := range policies {
+		var policy cedar.Policy
+		if err := policy.UnmarshalCedar([]byte(p.Text)); err != nil {
+			return nil, fmt.Errorf("parse policy %s: %w", p.ID, err)
+		}
+		ps.Add(cedar.PolicyID(p.ID), &policy)
+	}
+	return ps, nil
+}
+
 // ApproveVersion marks a policy version as approved.
 func (r *PolicyRepo) ApproveVersion(ctx context.Context, policyID int64, version int, approver string) error {
 	result, err := r.db.Writer().Exec(ctx, `
@@ -769,11 +787,11 @@ type EntityRecord struct {
 
 // Entity is a simple entity representation for simulation.
 type Entity struct {
-	Type       string          `json:"type"`
-	EntityID   string          `json:"entity_id"`
-	Attributes map[string]any  `json:"attributes,omitempty"`
-	ParentType *string         `json:"parent_type,omitempty"`
-	ParentID   *string         `json:"parent_id,omitempty"`
+	Type       string         `json:"type"`
+	EntityID   string         `json:"entity_id"`
+	Attributes map[string]any `json:"attributes,omitempty"`
+	ParentType *string        `json:"parent_type,omitempty"`
+	ParentID   *string        `json:"parent_id,omitempty"`
 }
 
 // List returns all entities for an application as Entity slice.

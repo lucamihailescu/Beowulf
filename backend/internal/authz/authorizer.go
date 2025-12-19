@@ -43,6 +43,7 @@ type EvaluationResult struct {
 // PolicyProvider supplies active policy texts for an application.
 type PolicyProvider interface {
 	ActivePolicies(ctx context.Context, applicationID int64) ([]PolicyText, error)
+	ActivePolicySet(ctx context.Context, applicationID int64) (*cedar.PolicySet, error)
 }
 
 // EntityProvider supplies entities for an application as Cedar-compatible data.
@@ -71,7 +72,7 @@ func NewService(policies PolicyProvider, entities EntityProvider) *Service {
 
 // Evaluate loads policies/entities for the application and runs Cedar authorization.
 func (s *Service) Evaluate(ctx context.Context, in EvaluateInput) (EvaluationResult, error) {
-	policies, err := s.policies.ActivePolicies(ctx, in.ApplicationID)
+	ps, err := s.policies.ActivePolicySet(ctx, in.ApplicationID)
 	if err != nil {
 		return EvaluationResult{}, fmt.Errorf("load policies: %w", err)
 	}
@@ -79,15 +80,6 @@ func (s *Service) Evaluate(ctx context.Context, in EvaluateInput) (EvaluationRes
 	entities, err := s.entities.Entities(ctx, in.ApplicationID)
 	if err != nil {
 		return EvaluationResult{}, fmt.Errorf("load entities: %w", err)
-	}
-
-	ps := cedar.NewPolicySet()
-	for _, p := range policies {
-		var policy cedar.Policy
-		if err := policy.UnmarshalCedar([]byte(p.Text)); err != nil {
-			return EvaluationResult{}, fmt.Errorf("parse policy %s: %w", p.ID, err)
-		}
-		ps.Add(cedar.PolicyID(p.ID), &policy)
 	}
 
 	req := cedar.Request{
@@ -114,18 +106,9 @@ func (s *Service) Evaluate(ctx context.Context, in EvaluateInput) (EvaluationRes
 // LookupResources returns a list of resource IDs of the given type that the principal can perform the action on.
 func (s *Service) LookupResources(ctx context.Context, in LookupInput) ([]string, error) {
 	// 1. Load Policies
-	policies, err := s.policies.ActivePolicies(ctx, in.ApplicationID)
+	ps, err := s.policies.ActivePolicySet(ctx, in.ApplicationID)
 	if err != nil {
 		return nil, fmt.Errorf("load policies: %w", err)
-	}
-
-	ps := cedar.NewPolicySet()
-	for _, p := range policies {
-		var policy cedar.Policy
-		if err := policy.UnmarshalCedar([]byte(p.Text)); err != nil {
-			return nil, fmt.Errorf("parse policy %s: %w", p.ID, err)
-		}
-		ps.Add(cedar.PolicyID(p.ID), &policy)
 	}
 
 	// 2. Load Entities (Context for evaluation)
