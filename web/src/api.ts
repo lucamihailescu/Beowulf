@@ -434,6 +434,11 @@ export type BackendInstanceRejectRequest = {
   reason?: string;
 };
 
+export type ObservabilityConfig = {
+  enabled: boolean;
+  endpoint: string;
+};
+
 // Simulation types
 export type SimulationMode = 'production_replay' | 'sample_data' | 'custom';
 
@@ -897,6 +902,18 @@ export const api = {
       return request<BackendAuthConfig>("/v1/settings/backend-auth/approval", {
         method: "PUT",
         body: JSON.stringify({ approval_required: required }),
+      });
+    },
+
+    // Observability settings
+    getObservability(): Promise<ObservabilityConfig> {
+      return request<ObservabilityConfig>("/v1/settings/observability");
+    },
+
+    updateObservability(config: ObservabilityConfig): Promise<ObservabilityConfig> {
+      return request<ObservabilityConfig>("/v1/settings/observability", {
+        method: "PUT",
+        body: JSON.stringify(config),
       });
     },
   },

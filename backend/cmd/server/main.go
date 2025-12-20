@@ -27,18 +27,6 @@ func main() {
 	cfg := config.Load()
 	ctx := context.Background()
 
-	// Initialize tracing
-	shutdown, err := observability.InitTracer(ctx, "cedar-backend")
-	if err != nil {
-		log.Printf("failed to initialize tracer: %v", err)
-	} else {
-		defer func() {
-			if err := shutdown(ctx); err != nil {
-				log.Printf("failed to shutdown tracer: %v", err)
-			}
-		}()
-	}
-
 	db, err := storage.NewDB(ctx, cfg.DBURL, cfg.DBReadURL, cfg.DBMaxConns, cfg.DBMinConns)
 	if err != nil {
 		log.Fatalf("failed to connect to postgres: %v", err)
@@ -52,6 +40,36 @@ func main() {
 	auditRepo := storage.NewAuditRepo(db)
 	namespaceRepo := storage.NewNamespaceRepo(db)
 	settingsRepo := storage.NewSettingsRepo(db)
+
+	// Initialize tracing
+	obsEnabled := settingsRepo.GetValue(ctx, "observability.enabled") == "true"
+	obsEndpoint := settingsRepo.GetValue(ctx, "observability.endpoint")
+	// If not set in DB, check env var for backward compatibility
+	if obsEndpoint == "" {
+		obsEndpoint = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	}
+	// If env var is set but enabled is not set (default false), we might want to default to true if env var is present?
+	// Or just stick to explicit enablement. Let's stick to explicit enablement via DB, but maybe default to true if env var is present and DB is empty?
+	// For now, let's just use what's in DB. If DB is empty, it's disabled.
+	// Exception: If OTEL_EXPORTER_OTLP_ENDPOINT is set, we assume it should be enabled initially if no DB setting exists.
+	if obsEndpoint != "" && settingsRepo.GetValue(ctx, "observability.enabled") == "" {
+		obsEnabled = true
+	}
+
+	shutdown, err := observability.InitTracer(ctx, "cedar-backend", observability.Config{
+		Enabled:  obsEnabled,
+		Endpoint: obsEndpoint,
+	})
+	if err != nil {
+		log.Printf("failed to initialize tracer: %v", err)
+	} else {
+		defer func() {
+			if err := shutdown(ctx); err != nil {
+				log.Printf("failed to shutdown tracer: %v", err)
+			}
+		}()
+	}
+
 	backendAuthRepo := storage.NewBackendAuthRepo(db.Writer())
 	backendInstanceRepo := storage.NewBackendInstanceRepo(db.Writer())
 	backendInstanceRepo.SetAuthRepo(backendAuthRepo) // For auto-approval when approval_required is false

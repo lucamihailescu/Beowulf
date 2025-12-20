@@ -386,6 +386,10 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 		r.Put("/backend-auth", api.handleUpdateBackendAuthConfig)
 		r.Post("/backend-auth/ca", api.handleUploadCACertificate)
 		r.Delete("/backend-auth/ca", api.handleRemoveCACertificate)
+
+		// Observability settings
+		r.Get("/observability", api.GetObservabilityConfig)
+		r.Put("/observability", api.UpdateObservabilityConfig)
 	})
 
 	// Backend authentication verification (for backends to verify their credentials)

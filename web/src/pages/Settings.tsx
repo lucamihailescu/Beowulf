@@ -25,6 +25,7 @@ import { api, EntraSettings, ADConfig, IdentityProvider } from "../api";
 import { EntraSetupWizard } from "../components/EntraSetupWizard";
 import ADSetupWizard from "../components/ADSetupWizard";
 import BackendAuthSettings from "../components/BackendAuthSettings";
+import ObservabilitySettings from "../components/ObservabilitySettings";
 
 const { Title, Paragraph } = Typography;
 
@@ -392,6 +393,16 @@ export default function Settings() {
         </Space>
       ),
       children: <BackendAuthSettings />,
+    },
+    {
+      key: "observability",
+      label: (
+        <Space>
+          <CloudOutlined />
+          Observability
+        </Space>
+      ),
+      children: <ObservabilitySettings />,
     },
   ];
 
