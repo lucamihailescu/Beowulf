@@ -1,0 +1,17 @@
+[Unit]
+Description=Cedar Backend Service
+After=network.target postgresql.service redis.service
+
+[Service]
+Type=simple
+User=cedar
+Group=cedar
+WorkingDirectory=/Users/lucamihailescu/cedar
+ExecStart=/Users/lucamihailescu/cedar/server
+Restart=always
+RestartSec=5
+EnvironmentFile=/Users/lucamihailescu/cedar/.env
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
