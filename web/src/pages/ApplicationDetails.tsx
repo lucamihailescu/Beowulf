@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
-import { Alert, Button, Card, Checkbox, Collapse, Descriptions, Dropdown, Input, Modal, Select, Space, Table, Tag, Typography } from "antd";
+import { Alert, Button, Card, Checkbox, Collapse, Descriptions, Dropdown, Input, Modal, Select, Space, Table, Tag, Typography, message } from "antd";
 import { CheckCircleOutlined, CloseCircleOutlined, PlusOutlined, EditOutlined, DownOutlined, FileTextOutlined, ThunderboltOutlined, DeleteOutlined } from "@ant-design/icons";
 import { api, type Application, type PolicySummary, type PolicyDetails, type Schema, type AuthorizeResponse } from "../api";
 import SchemaWizard from "../components/SchemaWizard";
@@ -47,6 +47,7 @@ export default function ApplicationDetails() {
   const [simLoading, setSimLoading] = useState(false);
   const [simError, setSimError] = useState("");
   const [simResult, setSimResult] = useState<AuthorizeResponse | null>(null);
+  const [deleteAppLoading, setDeleteAppLoading] = useState(false);
 
   const commonActions = ["view", "edit", "delete", "create", "share", "admin", "read", "write"];
   const commonTypes = ["User", "Group", "Document", "Folder", "Resource"];
@@ -86,6 +87,40 @@ export default function ApplicationDetails() {
     }
     return [];
   }, [activeSchema]);
+
+  async function handleDeleteApp() {
+    if (!app) return;
+    
+    Modal.confirm({
+      title: "Delete Application",
+      content: (
+        <Space direction="vertical">
+          <Typography.Text>
+            Are you sure you want to delete <strong>{app.name}</strong>?
+          </Typography.Text>
+          <Typography.Text type="secondary">
+            The application will be soft-deleted and can be restored within 30 days.
+            After 30 days, it will be permanently deleted.
+          </Typography.Text>
+        </Space>
+      ),
+      okText: "Delete",
+      okType: "danger",
+      cancelText: "Cancel",
+      onOk: async () => {
+        setDeleteAppLoading(true);
+        try {
+          await api.deleteApp(app.id);
+          message.success("Application deleted successfully");
+          navigate("/");
+        } catch (err: any) {
+          message.error(err.message || "Failed to delete application");
+        } finally {
+          setDeleteAppLoading(false);
+        }
+      },
+    });
+  }
 
   async function runSimulation() {
     if (!simPrincipalId || !simResourceId) {
@@ -1008,6 +1043,33 @@ permit (
           </Space>
         )}
       </Modal>
+
+      {/* Danger Zone */}
+      <Card
+        title={<Typography.Text type="danger">Danger Zone</Typography.Text>}
+        style={{ borderColor: "#ff4d4f" }}
+      >
+        <Space direction="vertical" size={16} style={{ width: "100%" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <Typography.Text strong>Delete Application</Typography.Text>
+              <br />
+              <Typography.Text type="secondary">
+                Soft delete this application. It can be restored within 30 days.
+              </Typography.Text>
+            </div>
+            <Button 
+              danger 
+              type="primary" 
+              icon={<DeleteOutlined />} 
+              onClick={handleDeleteApp}
+              loading={deleteAppLoading}
+            >
+              Delete Application
+            </Button>
+          </div>
+        </Space>
+      </Card>
 
       <SchemaWizard
         open={schemaWizardOpen}

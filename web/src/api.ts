@@ -68,6 +68,7 @@ export type Application = {
   description: string;
   approval_required: boolean;
   created_at: string;
+  deleted_at?: string;
 };
 
 export type CreateApplicationRequest = {
@@ -637,14 +638,31 @@ export const api = {
   },
 
   // Application endpoints
-  listApps(): Promise<Application[]> {
-    return request<Application[]>("/v1/apps/");
+  listApps(includeDeleted = false): Promise<Application[]> {
+    const query = includeDeleted ? "?include_deleted=true" : "";
+    return request<Application[]>(`/v1/apps/${query}`);
   },
 
   createApp(payload: CreateApplicationRequest): Promise<{ id: number }> {
     return request<{ id: number }>("/v1/apps/", {
       method: "POST",
       body: JSON.stringify(payload),
+    });
+  },
+
+  getApp(id: number): Promise<Application> {
+    return request<Application>(`/v1/apps/${id}`);
+  },
+
+  deleteApp(id: number): Promise<void> {
+    return request<void>(`/v1/apps/${id}`, {
+      method: "DELETE",
+    });
+  },
+
+  restoreApp(id: number): Promise<void> {
+    return request<void>(`/v1/apps/${id}/restore`, {
+      method: "POST",
     });
   },
 

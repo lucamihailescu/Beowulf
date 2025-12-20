@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Checkbox, Col, Collapse, Input, Modal, Row, Select, Space, Steps, Table, Tag, Typography } from "antd";
-import { PlusOutlined, RocketOutlined } from "@ant-design/icons";
+import { Alert, Button, Card, Checkbox, Col, Collapse, Input, Modal, Row, Select, Space, Steps, Table, Tag, Typography, message } from "antd";
+import { PlusOutlined, RocketOutlined, UndoOutlined } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
 import { API_BASE_URL, api, type Application, type Namespace } from "../api";
 
@@ -21,6 +21,7 @@ export default function Applications() {
   const [selectedNamespaceId, setSelectedNamespaceId] = useState<number | undefined>(undefined);
   const [description, setDescription] = useState("");
   const [approvalRequired, setApprovalRequired] = useState(true);
+  const [showDeleted, setShowDeleted] = useState(false);
 
   // New namespace modal
   const [newNamespaceModalOpen, setNewNamespaceModalOpen] = useState(false);
@@ -46,7 +47,7 @@ export default function Applications() {
     setNotice("");
     try {
       const [appsData, namespacesData] = await Promise.all([
-        api.listApps(),
+        api.listApps(showDeleted),
         api.listNamespaces(),
       ]);
       setApps(appsData);
@@ -60,7 +61,7 @@ export default function Applications() {
 
   useEffect(() => {
     refresh();
-  }, []);
+  }, [showDeleted]);
 
   async function onCreateNamespace() {
     setError("");
@@ -135,6 +136,16 @@ export default function Applications() {
     }
   }
 
+  async function handleRestoreApp(id: number) {
+    try {
+      await api.restoreApp(id);
+      message.success("Application restored successfully");
+      refresh();
+    } catch (err: any) {
+      message.error(err.message || "Failed to restore application");
+    }
+  }
+
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
       <div>
@@ -157,6 +168,10 @@ export default function Applications() {
             title="Registered Applications" 
             loading={loading}
             extra={
+              <Space>
+                <Checkbox checked={showDeleted} onChange={(e) => setShowDeleted(e.target.checked)}>
+                  Show Deleted
+                </Checkbox>
                 <Button type="primary" icon={<PlusOutlined />} onClick={() => {
                   // Expand the create section and scroll to it
                   setActiveCollapseKeys(prev => prev.includes("create") ? prev : [...prev, "create"]);
@@ -164,8 +179,9 @@ export default function Applications() {
                     document.getElementById("create-app-section")?.scrollIntoView({ behavior: "smooth" });
                   }, 100);
                 }}>
-                New Application
-              </Button>
+                  New Application
+                </Button>
+              </Space>
             }
           >
             {apps.length === 0 ? (
@@ -182,10 +198,31 @@ export default function Applications() {
                 dataSource={apps}
                 columns={[
                   { title: "Name", dataIndex: "name", render: (v, record) => (
-                    <a onClick={() => navigate(`/applications/${record.id}`)}>{v}</a>
+                    <Space>
+                      <a onClick={() => navigate(`/applications/${record.id}`)}>{v}</a>
+                      {record.deleted_at && <Tag color="red">Deleted</Tag>}
+                    </Space>
                   )},
                   { title: "Namespace", dataIndex: "namespace_name", render: (v) => <Tag color="blue">{v}</Tag> },
                   { title: "Description", dataIndex: "description", ellipsis: true },
+                  {
+                    title: "Actions",
+                    key: "actions",
+                    render: (_, record) => (
+                      record.deleted_at ? (
+                        <Button 
+                          size="small" 
+                          icon={<UndoOutlined />} 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRestoreApp(record.id);
+                          }}
+                        >
+                          Restore
+                        </Button>
+                      ) : null
+                    )
+                  }
                 ]}
                 onRow={(record) => ({
                   onClick: () => navigate(`/applications/${record.id}`),

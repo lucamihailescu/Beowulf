@@ -108,13 +108,14 @@ func (r *NamespaceRepo) GetByName(ctx context.Context, name string) (*Namespace,
 
 // Application models an onboarded application.
 type Application struct {
-	ID               int64     `json:"id"`
-	Name             string    `json:"name"`
-	NamespaceID      int64     `json:"namespace_id"`
-	NamespaceName    string    `json:"namespace_name"`
-	Description      string    `json:"description"`
-	ApprovalRequired bool      `json:"approval_required"`
-	CreatedAt        time.Time `json:"created_at"`
+	ID               int64      `json:"id"`
+	Name             string     `json:"name"`
+	NamespaceID      int64      `json:"namespace_id"`
+	NamespaceName    string     `json:"namespace_name"`
+	Description      string     `json:"description"`
+	ApprovalRequired bool       `json:"approval_required"`
+	CreatedAt        time.Time  `json:"created_at"`
+	DeletedAt        *time.Time `json:"deleted_at,omitempty"`
 }
 
 // ApplicationRepo manages application records.
@@ -132,7 +133,7 @@ func (r *ApplicationRepo) Create(ctx context.Context, name string, namespaceID i
 	row := r.db.Writer().QueryRow(ctx, `
 		INSERT INTO applications (name, namespace_id, description, approval_required)
 		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (name) DO UPDATE SET namespace_id = EXCLUDED.namespace_id, description = EXCLUDED.description, approval_required = EXCLUDED.approval_required
+		ON CONFLICT (name) DO UPDATE SET namespace_id = EXCLUDED.namespace_id, description = EXCLUDED.description, approval_required = EXCLUDED.approval_required, deleted_at = NULL
 		RETURNING id
 	`, name, namespaceID, description, approvalRequired)
 	var id int64
@@ -151,14 +152,19 @@ func (r *ApplicationRepo) Create(ctx context.Context, name string, namespaceID i
 	return id, nil
 }
 
-// List returns all applications with their namespace names.
-func (r *ApplicationRepo) List(ctx context.Context) ([]Application, error) {
-	rows, err := r.db.Reader().Query(ctx, `
-		SELECT a.id, a.name, COALESCE(a.namespace_id, 0), COALESCE(n.name, a.namespace, ''), COALESCE(a.description, ''), a.approval_required, a.created_at
+// List returns applications with their namespace names.
+func (r *ApplicationRepo) List(ctx context.Context, includeDeleted bool) ([]Application, error) {
+	query := `
+		SELECT a.id, a.name, COALESCE(a.namespace_id, 0), COALESCE(n.name, a.namespace, ''), COALESCE(a.description, ''), a.approval_required, a.created_at, a.deleted_at
 		FROM applications a
 		LEFT JOIN namespaces n ON a.namespace_id = n.id
-		ORDER BY a.created_at DESC
-	`)
+	`
+	if !includeDeleted {
+		query += " WHERE a.deleted_at IS NULL"
+	}
+	query += " ORDER BY a.created_at DESC"
+
+	rows, err := r.db.Reader().Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("list applications: %w", err)
 	}
@@ -167,7 +173,7 @@ func (r *ApplicationRepo) List(ctx context.Context) ([]Application, error) {
 	var apps []Application
 	for rows.Next() {
 		var a Application
-		if err := rows.Scan(&a.ID, &a.Name, &a.NamespaceID, &a.NamespaceName, &a.Description, &a.ApprovalRequired, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.Name, &a.NamespaceID, &a.NamespaceName, &a.Description, &a.ApprovalRequired, &a.CreatedAt, &a.DeletedAt); err != nil {
 			return nil, fmt.Errorf("scan application: %w", err)
 		}
 		apps = append(apps, a)
@@ -176,6 +182,53 @@ func (r *ApplicationRepo) List(ctx context.Context) ([]Application, error) {
 		return nil, fmt.Errorf("iterate applications: %w", rows.Err())
 	}
 	return apps, nil
+}
+
+// Get returns an application by ID, including deleted ones.
+func (r *ApplicationRepo) Get(ctx context.Context, id int64) (*Application, error) {
+	row := r.db.Reader().QueryRow(ctx, `
+		SELECT a.id, a.name, COALESCE(a.namespace_id, 0), COALESCE(n.name, a.namespace, ''), COALESCE(a.description, ''), a.approval_required, a.created_at, a.deleted_at
+		FROM applications a
+		LEFT JOIN namespaces n ON a.namespace_id = n.id
+		WHERE a.id = $1
+	`, id)
+
+	var a Application
+	if err := row.Scan(&a.ID, &a.Name, &a.NamespaceID, &a.NamespaceName, &a.Description, &a.ApprovalRequired, &a.CreatedAt, &a.DeletedAt); err != nil {
+		if err.Error() == "no rows in result set" {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get application: %w", err)
+	}
+	return &a, nil
+}
+
+// SoftDelete marks an application as deleted.
+func (r *ApplicationRepo) SoftDelete(ctx context.Context, id int64) error {
+	result, err := r.db.Writer().Exec(ctx, `
+		UPDATE applications SET deleted_at = NOW() WHERE id = $1
+	`, id)
+	if err != nil {
+		return fmt.Errorf("soft delete application: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("application not found")
+	}
+	return nil
+}
+
+// Restore restores a soft-deleted application.
+func (r *ApplicationRepo) Restore(ctx context.Context, id int64) error {
+	result, err := r.db.Writer().Exec(ctx, `
+		UPDATE applications SET deleted_at = NULL WHERE id = $1
+	`, id)
+	if err != nil {
+		return fmt.Errorf("restore application: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("application not found")
+	}
+	return nil
 }
 
 // PolicyRepo fetches active policies for applications.

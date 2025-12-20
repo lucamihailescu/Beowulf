@@ -326,6 +326,8 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 	r.Route("/v1/apps", func(r chi.Router) {
 		r.Get("/", api.handleListApps)
 		r.Post("/", api.handleCreateApp)
+		r.Delete("/{id}", api.handleDeleteApp)
+		r.Post("/{id}/restore", api.handleRestoreApp)
 	})
 
 	r.Route("/v1/namespaces", func(r chi.Router) {
@@ -890,6 +892,24 @@ func (a *API) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if application exists and is not deleted
+	app, err := a.apps.Get(r.Context(), req.ApplicationID)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": "failed to retrieve application"})
+		return
+	}
+	if app == nil {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"error": "application not found"})
+		return
+	}
+	if app.DeletedAt != nil {
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]string{"error": "application is deleted"})
+		return
+	}
+
 	// Prepare context with cache source tracker
 	var cacheSource string = "DB" // Default if not updated
 	ctx := context.WithValue(r.Context(), storage.CtxKeyCacheSource, &cacheSource)
@@ -956,7 +976,8 @@ func (a *API) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} map[string]string
 // @Router /v1/apps [get]
 func (a *API) handleListApps(w http.ResponseWriter, r *http.Request) {
-	appsList, err := a.apps.List(r.Context())
+	includeDeleted := r.URL.Query().Get("include_deleted") == "true"
+	appsList, err := a.apps.List(r.Context(), includeDeleted)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -1013,6 +1034,81 @@ func (a *API) handleCreateApp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(map[string]any{"id": id})
+}
+
+// @Summary Delete Application
+// @Description Soft-deletes an application
+// @Tags Applications
+// @Produce json
+// @Security ApiKeyAuth
+// @Security BearerAuth
+// @Param id path int true "Application ID"
+// @Success 200 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /v1/apps/{id} [delete]
+func (a *API) handleDeleteApp(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid application id"})
+		return
+	}
+
+	if err := a.apps.SoftDelete(r.Context(), id); err != nil {
+		if err.Error() == "application not found" {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{"error": "application not found"})
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Invalidate cache for this application
+	if a.cache != nil {
+		_ = a.cache.InvalidateApp(r.Context(), id)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+}
+
+// @Summary Restore Application
+// @Description Restores a soft-deleted application
+// @Tags Applications
+// @Produce json
+// @Security ApiKeyAuth
+// @Security BearerAuth
+// @Param id path int true "Application ID"
+// @Success 200 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /v1/apps/{id}/restore [post]
+func (a *API) handleRestoreApp(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid application id"})
+		return
+	}
+
+	if err := a.apps.Restore(r.Context(), id); err != nil {
+		if err.Error() == "application not found" {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{"error": "application not found"})
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "restored"})
 }
 
 // @Summary List Namespaces
@@ -1855,7 +1951,7 @@ func (a *API) handleGetEntitlements(w http.ResponseWriter, r *http.Request) {
 	if req.ApplicationID > 0 {
 		appID = req.ApplicationID
 		// Get app name
-		apps, err := a.apps.List(r.Context())
+		apps, err := a.apps.List(r.Context(), false)
 		if err == nil {
 			for _, app := range apps {
 				if app.ID == appID {
@@ -1866,7 +1962,7 @@ func (a *API) handleGetEntitlements(w http.ResponseWriter, r *http.Request) {
 		}
 	} else if req.ApplicationName != "" {
 		// Lookup by name
-		apps, err := a.apps.List(r.Context())
+		apps, err := a.apps.List(r.Context(), false)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(map[string]string{"error": "failed to lookup application"})
