@@ -117,7 +117,9 @@ def test_load_balancing_distribution(num_requests=30):
             # Use cluster status endpoint as it returns instance_id
             # Add small delay to avoid rate limiting
             time.sleep(0.05)
-            resp = request_with_retry("GET", f"{BASE_URL}/v1/cluster/status", timeout=5)
+            # Force connection close to prevent Keep-Alive stickiness in tests
+            headers = {"Connection": "close"}
+            resp = request_with_retry("GET", f"{BASE_URL}/v1/cluster/status", headers=headers, timeout=5)
             if resp.ok:
                 data = resp.json()
                 return data.get("instance_id"), None
