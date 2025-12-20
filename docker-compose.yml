@@ -20,6 +20,11 @@ services:
     command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
 
   load-balancer:
     build:
@@ -63,13 +68,18 @@ services:
       AZURE_AUDIENCE: ${AZURE_AUDIENCE:-}
       KERBEROS_KEYTAB: ${KERBEROS_KEYTAB:-}
       KERBEROS_SERVICE: ${KERBEROS_SERVICE:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-jaeger:4317}
     # Ports are exposed internally for load balancer, not to host
     expose:
       - "8080"
       - "50051"
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
 
   migrate:
     build:
@@ -112,6 +122,15 @@ services:
       - "80"
     depends_on:
       - backend
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.55
+    ports:
+      - "16686:16686" # UI
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
 
 volumes:
   pgdata:

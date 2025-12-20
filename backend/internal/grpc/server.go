@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 
@@ -36,7 +37,9 @@ func (s *Server) Start() error {
 		return fmt.Errorf("failed to listen: %v", err)
 	}
 
-	s.grpcServer = grpc.NewServer()
+	s.grpcServer = grpc.NewServer(
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+	)
 	authzv1.RegisterAuthorizationServiceServer(s.grpcServer, s)
 
 	// Enable reflection for tools like grpcurl

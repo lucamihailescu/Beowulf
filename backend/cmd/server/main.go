@@ -16,6 +16,7 @@ import (
 	"cedar/internal/config"
 	internalgrpc "cedar/internal/grpc"
 	"cedar/internal/httpserver"
+	"cedar/internal/observability"
 	"cedar/internal/simulation"
 	"cedar/internal/storage"
 )
@@ -25,6 +26,18 @@ func main() {
 
 	cfg := config.Load()
 	ctx := context.Background()
+
+	// Initialize tracing
+	shutdown, err := observability.InitTracer(ctx, "cedar-backend")
+	if err != nil {
+		log.Printf("failed to initialize tracer: %v", err)
+	} else {
+		defer func() {
+			if err := shutdown(ctx); err != nil {
+				log.Printf("failed to shutdown tracer: %v", err)
+			}
+		}()
+	}
 
 	db, err := storage.NewDB(ctx, cfg.DBURL, cfg.DBReadURL, cfg.DBMaxConns, cfg.DBMinConns)
 	if err != nil {

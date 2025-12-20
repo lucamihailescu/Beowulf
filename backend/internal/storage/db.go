@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -47,6 +48,8 @@ func newPool(ctx context.Context, url string, maxConns, minConns int32) (*pgxpoo
 	if minConns > 0 {
 		cfg.MinConns = minConns
 	}
+
+	cfg.ConnConfig.Tracer = otelpgx.NewTracer()
 
 	return pgxpool.NewWithConfig(ctx, cfg)
 }
