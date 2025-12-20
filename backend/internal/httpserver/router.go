@@ -53,6 +53,7 @@ type clusterStatusResponse struct {
 	Checks       map[string]healthCheck `json:"checks"`
 	Cache        *cacheStats            `json:"cache,omitempty"`
 	SSEClients   int                    `json:"sse_clients"`
+	Requests     int64                  `json:"requests"`
 	StartedAt    string                 `json:"started_at"`
 }
 
@@ -292,7 +293,16 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
-	// r.Use(middleware.Timeout(60 * time.Second)) // Timeout middleware breaks SSE
+
+	// Request counting middleware
+	if instanceRegistry != nil {
+		r.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				instanceRegistry.IncrementRequestCount()
+				next.ServeHTTP(w, r)
+			})
+		})
+	}
 
 	// Initialize auth middleware (reads auth settings from database first, then falls back to env vars)
 	authMiddleware, err := NewAuthMiddleware(cfg, settings)
@@ -592,6 +602,12 @@ func (a *API) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
 	uptime := time.Since(a.startedAt)
 	uptimeStr := formatDuration(uptime)
 
+	// Get request count
+	var requests int64
+	if a.instanceRegistry != nil {
+		requests = a.instanceRegistry.GetRequestCount()
+	}
+
 	resp := clusterStatusResponse{
 		InstanceID:   a.instanceID,
 		Status:       overallStatus,
@@ -600,6 +616,7 @@ func (a *API) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
 		Checks:       checks,
 		Cache:        cacheStatsResp,
 		SSEClients:   sseClients,
+		Requests:     requests,
 		StartedAt:    a.startedAt.UTC().Format(time.RFC3339),
 	}
 

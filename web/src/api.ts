@@ -25,6 +25,7 @@ export type ClusterStatusResponse = {
   checks: Record<string, HealthCheck>;
   cache?: CacheStats;
   sse_clients: number;
+  requests: number;
   started_at: string;
 };
 
@@ -38,6 +39,7 @@ export type InstanceInfo = {
   checks: Record<string, HealthCheck>;
   cache?: CacheStats;
   sse_clients: number;
+  requests: number;
 };
 
 export type ListInstancesResponse = {

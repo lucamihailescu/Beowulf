@@ -10,6 +10,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -23,15 +24,16 @@ const (
 
 // InstanceInfo contains status information about a backend instance
 type InstanceInfo struct {
-	InstanceID   string                  `json:"instance_id"`
-	Status       string                  `json:"status"`
-	Uptime       string                  `json:"uptime"`
-	CedarVersion string                  `json:"cedar_version"`
-	StartedAt    time.Time               `json:"started_at"`
-	LastHeartbeat time.Time              `json:"last_heartbeat"`
-	Checks       map[string]HealthStatus `json:"checks"`
-	Cache        *CacheStatus            `json:"cache,omitempty"`
-	SSEClients   int                     `json:"sse_clients"`
+	InstanceID    string                  `json:"instance_id"`
+	Status        string                  `json:"status"`
+	Uptime        string                  `json:"uptime"`
+	CedarVersion  string                  `json:"cedar_version"`
+	StartedAt     time.Time               `json:"started_at"`
+	LastHeartbeat time.Time               `json:"last_heartbeat"`
+	Checks        map[string]HealthStatus `json:"checks"`
+	Cache         *CacheStatus            `json:"cache,omitempty"`
+	SSEClients    int                     `json:"sse_clients"`
+	Requests      int64                   `json:"requests"`
 }
 
 // HealthStatus represents the health of a dependency
@@ -51,17 +53,18 @@ type CacheStatus struct {
 
 // InstanceRegistry manages registration and discovery of backend instances
 type InstanceRegistry struct {
-	rdb              *redis.Client
-	instanceID       string
-	hostname         string
-	startedAt        time.Time
-	cedarVersion     string
-	backendInstRepo  *BackendInstanceRepo // For database persistence
+	rdb             *redis.Client
+	instanceID      string
+	hostname        string
+	startedAt       time.Time
+	cedarVersion    string
+	backendInstRepo *BackendInstanceRepo // For database persistence
 
-	mu          sync.RWMutex
-	statusFunc  func() InstanceInfo
-	stopCh      chan struct{}
-	stopped     bool
+	mu           sync.RWMutex
+	statusFunc   func() InstanceInfo
+	stopCh       chan struct{}
+	stopped      bool
+	requestCount int64
 }
 
 // NewInstanceRegistry creates a new instance registry
@@ -178,6 +181,9 @@ func (r *InstanceRegistry) register(ctx context.Context) {
 		info.LastHeartbeat = time.Now()
 	}
 
+	// Always update request count from atomic counter
+	info.Requests = r.GetRequestCount()
+
 	// Register to Redis for real-time discovery
 	data, err := json.Marshal(info)
 	if err != nil {
@@ -282,6 +288,16 @@ func (r *InstanceRegistry) ListInstances(ctx context.Context) ([]InstanceInfo, e
 	return instances, nil
 }
 
+// IncrementRequestCount increments the request counter
+func (r *InstanceRegistry) IncrementRequestCount() {
+	atomic.AddInt64(&r.requestCount, 1)
+}
+
+// GetRequestCount returns the current request count
+func (r *InstanceRegistry) GetRequestCount() int64 {
+	return atomic.LoadInt64(&r.requestCount)
+}
+
 // formatDuration formats a duration into a human-readable string
 func formatDuration(d time.Duration) string {
 	if d < time.Second {
@@ -315,4 +331,3 @@ func formatDuration(d time.Duration) string {
 
 	return strings.Join(parts, " ")
 }
-

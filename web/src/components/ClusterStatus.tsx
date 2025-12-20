@@ -300,7 +300,7 @@ export default function ClusterStatus({ refreshInterval = 60000, compact = false
                 </Col>
 
                 {/* Instance Details */}
-                <Col xs={24} sm={12} md={6}>
+                <Col xs={24} sm={12} md={4}>
                   <Space direction="vertical" size={0}>
                     <Text type="secondary" style={{ fontSize: 11 }}>Uptime</Text>
                     <Space size={4}>
@@ -310,7 +310,17 @@ export default function ClusterStatus({ refreshInterval = 60000, compact = false
                   </Space>
                 </Col>
 
-                <Col xs={24} sm={12} md={6}>
+                <Col xs={24} sm={12} md={4}>
+                  <Space direction="vertical" size={0}>
+                    <Text type="secondary" style={{ fontSize: 11 }}>Requests</Text>
+                    <Space size={4}>
+                      <CloudServerOutlined />
+                      <Text>{instance.requests ?? 0}</Text>
+                    </Space>
+                  </Space>
+                </Col>
+
+                <Col xs={24} sm={12} md={4}>
                   <Space direction="vertical" size={0}>
                     <Text type="secondary" style={{ fontSize: 11 }}>SSE Clients</Text>
                     <Space size={4}>
@@ -320,7 +330,7 @@ export default function ClusterStatus({ refreshInterval = 60000, compact = false
                   </Space>
                 </Col>
 
-                <Col xs={24} sm={12} md={6}>
+                <Col xs={24} sm={12} md={4}>
                   <Space direction="vertical" size={0}>
                     <Text type="secondary" style={{ fontSize: 11 }}>Database</Text>
                     <Space size={4}>
@@ -342,7 +352,7 @@ export default function ClusterStatus({ refreshInterval = 60000, compact = false
                   </Space>
                 </Col>
 
-                <Col xs={24} sm={12} md={6}>
+                <Col xs={24} sm={12} md={4}>
                   <Space direction="vertical" size={0}>
                     <Text type="secondary" style={{ fontSize: 11 }}>Redis</Text>
                     <Space size={4}>

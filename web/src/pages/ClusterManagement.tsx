@@ -268,6 +268,12 @@ export default function ClusterManagement() {
       render: (ver: string) => ver || "-",
     },
     {
+      title: "Requests",
+      dataIndex: "requests",
+      key: "requests",
+      render: (requests: number) => requests?.toLocaleString() || "0",
+    },
+    {
       title: "Last Heartbeat",
       dataIndex: "last_heartbeat",
       key: "last_heartbeat",
