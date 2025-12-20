@@ -76,11 +76,12 @@ const BackendAuthSettings: React.FC = () => {
     }
   };
 
-  const handleUploadCA = async (values: { ca_certificate: string }) => {
+  const handleUploadCA = async (values: { ca_certificate: string; ca_private_key?: string }) => {
     try {
       setSaving(true);
       const data = await api.settings.uploadCACertificate({
         ca_certificate: values.ca_certificate,
+        ca_private_key: values.ca_private_key,
       });
       setConfig(data);
       certForm.resetFields();
@@ -334,6 +335,31 @@ const BackendAuthSettings: React.FC = () => {
                   placeholder={`-----BEGIN CERTIFICATE-----
 MIIDXTCCAkWgAwIBAgIJAJ...
 -----END CERTIFICATE-----`}
+                  style={{ fontFamily: 'monospace' }}
+                />
+              </Form.Item>
+
+              <Form.Item
+                name="ca_private_key"
+                label="CA Private Key (PEM format) - Required for signing backend certificates"
+                rules={[
+                  {
+                    validator: (_, value) => {
+                      if (!value) return Promise.resolve();
+                      if (!value.includes('-----BEGIN') || !value.includes('PRIVATE KEY-----')) {
+                        return Promise.reject('Invalid PEM format. Must be a private key.');
+                      }
+                      return Promise.resolve();
+                    },
+                  },
+                ]}
+                help="The private key is stored securely and used to sign certificates for approved backend instances."
+              >
+                <TextArea
+                  rows={10}
+                  placeholder={`-----BEGIN RSA PRIVATE KEY-----
+MIIEpAIBAAKCAQEA...
+-----END RSA PRIVATE KEY-----`}
                   style={{ fontFamily: 'monospace' }}
                 />
               </Form.Item>

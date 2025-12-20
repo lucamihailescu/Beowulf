@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"runtime"
 	"runtime/debug"
@@ -56,6 +57,7 @@ type InstanceRegistry struct {
 	rdb             *redis.Client
 	instanceID      string
 	hostname        string
+	ipAddress       string
 	startedAt       time.Time
 	cedarVersion    string
 	backendInstRepo *BackendInstanceRepo // For database persistence
@@ -80,16 +82,43 @@ func NewInstanceRegistry(rdb *redis.Client, instanceID string) *InstanceRegistry
 	}
 
 	// Get hostname for database registration
-	hostname, _ := os.Hostname()
+	hostname := os.Getenv("INSTANCE_HOSTNAME")
+	if hostname == "" {
+		hostname, _ = os.Hostname()
+	}
+
+	// Get IP address
+	ipAddress := os.Getenv("INSTANCE_IP")
+	if ipAddress == "" {
+		ipAddress = getLocalIP()
+	}
 
 	return &InstanceRegistry{
 		rdb:          rdb,
 		instanceID:   instanceID,
 		hostname:     hostname,
+		ipAddress:    ipAddress,
 		startedAt:    time.Now(),
 		cedarVersion: version,
 		stopCh:       make(chan struct{}),
 	}
+}
+
+// getLocalIP returns the non-loopback local IP of the host
+func getLocalIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+	for _, address := range addrs {
+		// check the address type and if it is not a loopback the display it
+		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				return ipnet.IP.String()
+			}
+		}
+	}
+	return ""
 }
 
 // SetBackendInstanceRepo sets the database repository for persistent registration
@@ -201,6 +230,7 @@ func (r *InstanceRegistry) register(ctx context.Context) {
 		_, err := backendInstRepo.Register(ctx, BackendInstanceRegisterRequest{
 			InstanceID:   r.instanceID,
 			Hostname:     r.hostname,
+			IPAddress:    r.ipAddress,
 			CedarVersion: r.cedarVersion,
 			OSInfo:       runtime.GOOS,
 			Arch:         runtime.GOARCH,

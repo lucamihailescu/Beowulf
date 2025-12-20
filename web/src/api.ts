@@ -382,11 +382,13 @@ export type BackendAuthConfig = {
 export type BackendAuthConfigRequest = {
   auth_mode: BackendAuthMode;
   ca_certificate?: string;
+  ca_private_key?: string;
   shared_secret?: string;
 };
 
 export type CACertificateRequest = {
   ca_certificate: string;
+  ca_private_key?: string;
 };
 
 // Backend Instance types

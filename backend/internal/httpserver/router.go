@@ -220,7 +220,7 @@ type DBPinger interface {
 // @securityDefinitions.apikey BearerAuth
 // @in header
 // @name Authorization
-func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.ApplicationRepo, policies *storage.PolicyRepo, entities *storage.EntityRepo, schemas *storage.SchemaRepo, audits *storage.AuditRepo, namespaces *storage.NamespaceRepo, settings *storage.SettingsRepo, backendAuthRepo *storage.BackendAuthRepo, backendInstanceRepo *storage.BackendInstanceRepo, cache CacheInvalidator, cacheStore *storage.Cache, db DBPinger, instanceRegistry *storage.InstanceRegistry, simulationSvc *simulation.Service, redisClient *redis.Client) http.Handler {
+func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.ApplicationRepo, policies *storage.PolicyRepo, entities *storage.EntityRepo, schemas *storage.SchemaRepo, audits *storage.AuditRepo, namespaces *storage.NamespaceRepo, settings *storage.SettingsRepo, backendAuthRepo *storage.BackendAuthRepo, backendInstanceRepo *storage.BackendInstanceRepo, cache CacheInvalidator, cacheStore *storage.Cache, db DBPinger, instanceRegistry *storage.InstanceRegistry, simulationSvc *simulation.Service, redisClient *redis.Client, mode string) http.Handler {
 	// Create SSE broker for real-time event streaming
 	sseBroker := NewSSEBroker()
 
@@ -317,135 +317,136 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 	}
 
 	r.Get("/health", api.handleHealth)
-	r.Get("/v1/cluster/status", api.handleClusterStatus)
-	r.Get("/v1/cluster/instances", api.handleListInstances)
-	r.Get("/v1/cluster/live-backends", api.handleListLiveBackends)
-	r.Get("/v1/me", api.handleGetMe)
-	r.Post("/v1/authorize", api.handleAuthorize)
-
-	r.Route("/v1/apps", func(r chi.Router) {
-		r.Get("/", api.handleListApps)
-		r.Post("/", api.handleCreateApp)
-		r.Delete("/{id}", api.handleDeleteApp)
-		r.Post("/{id}/restore", api.handleRestoreApp)
-	})
-
-	r.Route("/v1/namespaces", func(r chi.Router) {
-		r.Get("/", api.handleListNamespaces)
-		r.Post("/", api.handleCreateNamespace)
-	})
-
-	r.Post("/v1/apps/{id}/policies", api.handleCreatePolicy)
-	r.Get("/v1/apps/{id}/policies", api.handleListPolicies)
-	r.Get("/v1/apps/{id}/policies/{policyId}", api.handleGetPolicy)
-	r.Post("/v1/apps/{id}/policies/{policyId}/versions/{version}/approve", api.handleApprovePolicy)
-	r.Post("/v1/apps/{id}/policies/{policyId}/versions/{version}/activate", api.handleActivatePolicy)
-	r.Delete("/v1/apps/{id}/policies/{policyId}", api.handleDeletePolicy)
-	r.Post("/v1/apps/{id}/policies/{policyId}/approve-delete", api.handleApproveDeletePolicy)
-
-	r.Post("/v1/apps/{id}/entities", api.handleUpsertEntity)
-	r.Get("/v1/apps/{id}/entities", api.handleListEntities)
-
-	r.Route("/v1/apps/{id}/schemas", func(r chi.Router) {
-		r.Get("/", api.handleListSchemas)
-		r.Post("/", api.handleCreateSchema)
-		r.Get("/active", api.handleGetActiveSchema)
-		r.Post("/activate", api.handleActivateSchema)
-	})
-
-	r.Get("/v1/apps/{id}/permissions", api.handleListPermissions)
-
-	// IdP Integration: Get entitlements for a user/groups
-	r.Post("/v1/entitlements", api.handleGetEntitlements)
-
-	// SSE: Real-time policy update events
-	r.Get("/v1/events", api.handleSSEEvents)
-
-	// Entra ID (Azure AD) integration for user/group lookup
-	r.Route("/v1/entra", func(r chi.Router) {
-		r.Get("/status", api.handleEntraStatus)
-		r.Get("/users", api.handleEntraSearchUsers)
-		r.Get("/users/{id}", api.handleEntraGetUser)
-		r.Get("/groups", api.handleEntraSearchGroups)
-		r.Get("/groups/{id}", api.handleEntraGetGroup)
-	})
-
-	// Active Directory (LDAP) integration for user/group lookup
-	r.Route("/v1/ad", func(r chi.Router) {
-		r.Get("/status", api.handleGetADStatus)
-		r.Get("/users", api.handleSearchADUsers)
-		r.Get("/groups", api.handleSearchADGroups)
-	})
-
-	// Identity provider status (returns which provider is active)
-	r.Get("/v1/identity-provider", api.handleGetIdentityProvider)
-
-	// Settings management
-	r.Route("/v1/settings", func(r chi.Router) {
-		r.Get("/entra", api.handleGetEntraSettings)
-		r.Post("/entra", api.handleSaveEntraSettings)
-		r.Post("/entra/test", api.handleTestEntraConnection)
-		r.Delete("/entra", api.handleDeleteEntraSettings)
-
-		// Active Directory settings
-		r.Get("/ad", api.handleGetADConfig)
-		r.Put("/ad", api.handleUpdateADConfig)
-		r.Post("/ad/test", api.handleTestADConnection)
-		r.Delete("/ad", api.handleDeleteADConfig)
-
-		// Backend authentication settings
-		r.Get("/backend-auth", api.handleGetBackendAuthConfig)
-		r.Put("/backend-auth", api.handleUpdateBackendAuthConfig)
-		r.Post("/backend-auth/ca", api.handleUploadCACertificate)
-		r.Delete("/backend-auth/ca", api.handleRemoveCACertificate)
-
-		// Observability settings
-		r.Get("/observability", api.GetObservabilityConfig)
-		r.Put("/observability", api.UpdateObservabilityConfig)
-	})
-
-	// Backend authentication verification (for backends to verify their credentials)
-	r.Post("/v1/cluster/verify", api.handleVerifyBackendAuth)
-
-	// Backend instance management
-	r.Route("/v1/cluster/backends", func(r chi.Router) {
-		r.Post("/register", api.handleRegisterBackendInstance)
-		r.Get("/", api.handleListBackendInstances)
-		r.Get("/pending", api.handleListPendingBackendInstances)
-		r.Get("/{instanceId}", api.handleGetBackendInstanceStatus)
-		r.Post("/{instanceId}/approve", api.handleApproveBackendInstance)
-		r.Post("/{instanceId}/reject", api.handleRejectBackendInstance)
-		r.Post("/{instanceId}/suspend", api.handleSuspendBackendInstance)
-		r.Post("/{instanceId}/unsuspend", api.handleUnsuspendBackendInstance)
-		r.Delete("/{instanceId}", api.handleDeleteBackendInstance)
-	})
-
-	// Update approval_required setting
-	r.Put("/v1/settings/backend-auth/approval", api.handleUpdateApprovalRequired)
-
 	// Public auth config endpoint (no auth required for this one)
 	r.Get("/v1/auth/config", api.handleGetAuthConfig)
-
 	// LDAP authentication endpoint
 	r.Post("/v1/auth/ldap", api.handleLDAPAuth)
-
 	// Session endpoint - logs login events and returns user info
 	r.Get("/v1/auth/session", api.handleGetSession)
-
-	r.Route("/v1/audit", func(r chi.Router) {
-		r.Get("/", api.handleListAuditLogs)
-	})
-
-	// Simulation routes
-	if simulationSvc != nil {
-		simAPI := NewSimulationAPI(simulationSvc)
-		RegisterSimulationRoutes(r, simAPI)
-	}
-
 	// Swagger UI
 	r.Get("/swagger/*", httpSwagger.Handler(
 		httpSwagger.URL("/swagger/doc.json"), // The url pointing to API definition
 	))
+
+	if mode == "management" || mode == "all" {
+		r.Get("/v1/cluster/status", api.handleClusterStatus)
+		r.Get("/v1/cluster/instances", api.handleListInstances)
+		r.Get("/v1/cluster/live-backends", api.handleListLiveBackends)
+		r.Get("/v1/me", api.handleGetMe)
+
+		r.Route("/v1/apps", func(r chi.Router) {
+			r.Get("/", api.handleListApps)
+			r.Post("/", api.handleCreateApp)
+			r.Delete("/{id}", api.handleDeleteApp)
+			r.Post("/{id}/restore", api.handleRestoreApp)
+		})
+
+		r.Route("/v1/namespaces", func(r chi.Router) {
+			r.Get("/", api.handleListNamespaces)
+			r.Post("/", api.handleCreateNamespace)
+		})
+
+		r.Post("/v1/apps/{id}/policies", api.handleCreatePolicy)
+		r.Get("/v1/apps/{id}/policies", api.handleListPolicies)
+		r.Get("/v1/apps/{id}/policies/{policyId}", api.handleGetPolicy)
+		r.Post("/v1/apps/{id}/policies/{policyId}/versions/{version}/approve", api.handleApprovePolicy)
+		r.Post("/v1/apps/{id}/policies/{policyId}/versions/{version}/activate", api.handleActivatePolicy)
+		r.Delete("/v1/apps/{id}/policies/{policyId}", api.handleDeletePolicy)
+		r.Post("/v1/apps/{id}/policies/{policyId}/approve-delete", api.handleApproveDeletePolicy)
+
+		r.Post("/v1/apps/{id}/entities", api.handleUpsertEntity)
+		r.Get("/v1/apps/{id}/entities", api.handleListEntities)
+
+		r.Route("/v1/apps/{id}/schemas", func(r chi.Router) {
+			r.Get("/", api.handleListSchemas)
+			r.Post("/", api.handleCreateSchema)
+			r.Get("/active", api.handleGetActiveSchema)
+			r.Post("/activate", api.handleActivateSchema)
+		})
+
+		r.Get("/v1/apps/{id}/permissions", api.handleListPermissions)
+
+		// SSE: Real-time policy update events
+		r.Get("/v1/events", api.handleSSEEvents)
+
+		// Entra ID (Azure AD) integration for user/group lookup
+		r.Route("/v1/entra", func(r chi.Router) {
+			r.Get("/status", api.handleEntraStatus)
+			r.Get("/users", api.handleEntraSearchUsers)
+			r.Get("/users/{id}", api.handleEntraGetUser)
+			r.Get("/groups", api.handleEntraSearchGroups)
+			r.Get("/groups/{id}", api.handleEntraGetGroup)
+		})
+
+		// Active Directory (LDAP) integration for user/group lookup
+		r.Route("/v1/ad", func(r chi.Router) {
+			r.Get("/status", api.handleGetADStatus)
+			r.Get("/users", api.handleSearchADUsers)
+			r.Get("/groups", api.handleSearchADGroups)
+		})
+
+		// Identity provider status (returns which provider is active)
+		r.Get("/v1/identity-provider", api.handleGetIdentityProvider)
+
+		// Settings management
+		r.Route("/v1/settings", func(r chi.Router) {
+			r.Get("/entra", api.handleGetEntraSettings)
+			r.Post("/entra", api.handleSaveEntraSettings)
+			r.Post("/entra/test", api.handleTestEntraConnection)
+			r.Delete("/entra", api.handleDeleteEntraSettings)
+
+			// Active Directory settings
+			r.Get("/ad", api.handleGetADConfig)
+			r.Put("/ad", api.handleUpdateADConfig)
+			r.Post("/ad/test", api.handleTestADConnection)
+			r.Delete("/ad", api.handleDeleteADConfig)
+
+			// Backend authentication settings
+			r.Get("/backend-auth", api.handleGetBackendAuthConfig)
+			r.Put("/backend-auth", api.handleUpdateBackendAuthConfig)
+			r.Post("/backend-auth/ca", api.handleUploadCACertificate)
+			r.Delete("/backend-auth/ca", api.handleRemoveCACertificate)
+
+			// Observability settings
+			r.Get("/observability", api.GetObservabilityConfig)
+			r.Put("/observability", api.UpdateObservabilityConfig)
+		})
+
+		// Backend authentication verification (for backends to verify their credentials)
+		r.Post("/v1/cluster/verify", api.handleVerifyBackendAuth)
+
+		// Backend instance management
+		r.Route("/v1/cluster/backends", func(r chi.Router) {
+			r.Post("/register", api.handleRegisterBackendInstance)
+			r.Get("/", api.handleListBackendInstances)
+			r.Get("/pending", api.handleListPendingBackendInstances)
+			r.Get("/{instanceId}", api.handleGetBackendInstanceStatus)
+			r.Post("/{instanceId}/approve", api.handleApproveBackendInstance)
+			r.Post("/{instanceId}/reject", api.handleRejectBackendInstance)
+			r.Post("/{instanceId}/suspend", api.handleSuspendBackendInstance)
+			r.Post("/{instanceId}/unsuspend", api.handleUnsuspendBackendInstance)
+			r.Delete("/{instanceId}", api.handleDeleteBackendInstance)
+		})
+
+		// Update approval_required setting
+		r.Put("/v1/settings/backend-auth/approval", api.handleUpdateApprovalRequired)
+
+		r.Route("/v1/audit", func(r chi.Router) {
+			r.Get("/", api.handleListAuditLogs)
+		})
+
+		// Simulation routes
+		if simulationSvc != nil {
+			simAPI := NewSimulationAPI(simulationSvc)
+			RegisterSimulationRoutes(r, simAPI)
+		}
+	}
+
+	if mode == "decision" || mode == "all" {
+		r.Post("/v1/authorize", api.handleAuthorize)
+		// IdP Integration: Get entitlements for a user/groups
+		r.Post("/v1/entitlements", api.handleGetEntitlements)
+	}
 
 	return otelhttp.NewHandler(r, "http.server")
 }
@@ -828,6 +829,25 @@ func (a *API) handleListLiveBackends(w http.ResponseWriter, r *http.Request) {
 			// Use the hostname (container ID) which Docker DNS can resolve
 			response.WriteString(fmt.Sprintf("server %s:8080;\n", inst.Hostname))
 			liveCount++
+		}
+	}
+
+	// Fallback: If no approved backends are live, check for pending backends (Bootstrap mode)
+	if liveCount == 0 {
+		pendingStatus := storage.BackendStatusPending
+		pendingList, err := a.backendInstanceRepo.List(r.Context(), &pendingStatus)
+		if err == nil && len(pendingList) > 0 {
+			response.WriteString("# No approved backends found. Falling back to PENDING backends (Bootstrap Mode)\n")
+			for _, inst := range pendingList {
+				isStale := true
+				if inst.LastHeartbeat != nil {
+					isStale = time.Since(*inst.LastHeartbeat) > 35*time.Second
+				}
+				if !isStale {
+					response.WriteString(fmt.Sprintf("server %s:8080;\n", inst.Hostname))
+					liveCount++
+				}
+			}
 		}
 	}
 

@@ -53,6 +53,12 @@ const initializeMsal = async (): Promise<PublicClientApplication> => {
   const response = await msalInstance.handleRedirectPromise();
   if (response) {
     msalInstance.setActiveAccount(response.account);
+  } else {
+    // Check if we have signed-in accounts
+    const accounts = msalInstance.getAllAccounts();
+    if (accounts.length > 0) {
+      msalInstance.setActiveAccount(accounts[0]);
+    }
   }
   
   return msalInstance;

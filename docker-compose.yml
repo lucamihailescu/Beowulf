@@ -43,6 +43,7 @@ services:
       - "50051:50051"
     depends_on:
       - backend
+      - config-service
       - web
 
   backend:
@@ -50,8 +51,9 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     environment:
+      SERVICE_MODE: decision
       APP_PORT: ${APP_PORT:-8080}
-      DATABASE_URL: ${DATABASE_URL:-postgres://cedar:cedar@db:5432/cedar?sslmode=disable}
+      DATABASE_URL: postgres://cedar:cedar@db:5432/cedar?sslmode=disable
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       # CORS - allow requests from frontend
@@ -81,6 +83,36 @@ services:
       redis:
         condition: service_healthy
 
+  config-service:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      SERVICE_MODE: management
+      APP_PORT: 8080
+      DATABASE_URL: postgres://cedar:cedar@db:5432/cedar?sslmode=disable
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-*}
+      AUTH_MODE: ${AUTH_MODE:-none}
+      API_KEY: ${API_KEY:-dev-secret-key}
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
+      AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET:-}
+      AZURE_AUDIENCE: ${AZURE_AUDIENCE:-}
+      KERBEROS_KEYTAB: ${KERBEROS_KEYTAB:-}
+      KERBEROS_SERVICE: ${KERBEROS_SERVICE:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-otel-collector:4317}
+    expose:
+      - "8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
   migrate:
     build:
       context: ./backend
@@ -88,7 +120,7 @@ services:
       target: builder
     working_dir: /app
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgres://cedar:cedar@db:5432/cedar?sslmode=disable}
+      DATABASE_URL: postgres://cedar:cedar@db:5432/cedar?sslmode=disable
     depends_on:
       db:
         condition: service_healthy

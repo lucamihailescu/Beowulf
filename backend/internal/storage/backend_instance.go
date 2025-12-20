@@ -29,6 +29,8 @@ type BackendInstance struct {
 	Status                BackendInstanceStatus `json:"status"`
 	CertFingerprint       string                `json:"cert_fingerprint,omitempty"`
 	ClusterSecretVerified bool                  `json:"cluster_secret_verified"`
+	CSR                   string                `json:"csr,omitempty"`
+	SignedCertificate     string                `json:"signed_certificate,omitempty"`
 
 	// Approval workflow
 	RequestedAt     time.Time  `json:"requested_at"`
@@ -56,6 +58,7 @@ type BackendInstanceRegisterRequest struct {
 	IPAddress             string                 `json:"ip_address,omitempty"`
 	CertFingerprint       string                 `json:"cert_fingerprint,omitempty"`
 	ClusterSecretVerified bool                   `json:"cluster_secret_verified"`
+	CSR                   string                 `json:"csr,omitempty"`
 	CedarVersion          string                 `json:"cedar_version,omitempty"`
 	OSInfo                string                 `json:"os_info,omitempty"`
 	Arch                  string                 `json:"arch,omitempty"`
@@ -64,8 +67,8 @@ type BackendInstanceRegisterRequest struct {
 
 // BackendInstanceRepo handles backend instance storage
 type BackendInstanceRepo struct {
-	pool         *pgxpool.Pool
-	authRepo     *BackendAuthRepo // For checking approval_required setting
+	pool     *pgxpool.Pool
+	authRepo *BackendAuthRepo // For checking approval_required setting
 }
 
 // NewBackendInstanceRepo creates a new BackendInstanceRepo
@@ -113,12 +116,12 @@ func (r *BackendInstanceRepo) Register(ctx context.Context, req BackendInstanceR
 	query := `
 		INSERT INTO backend_instances (
 			instance_id, hostname, ip_address, status,
-			cert_fingerprint, cluster_secret_verified,
+			cert_fingerprint, cluster_secret_verified, csr,
 			cedar_version, os_info, arch, last_heartbeat, metadata,
 			approved_at, approved_by
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), $10, $11, $12)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), $11, $12, $13)
 		RETURNING id, instance_id, hostname, ip_address, status,
-		          cert_fingerprint, cluster_secret_verified,
+		          cert_fingerprint, cluster_secret_verified, csr, signed_certificate,
 		          requested_at, approved_at, approved_by,
 		          rejected_at, rejected_by, rejection_reason,
 		          cedar_version, os_info, arch, last_heartbeat, metadata,
@@ -126,18 +129,18 @@ func (r *BackendInstanceRepo) Register(ctx context.Context, req BackendInstanceR
 	`
 
 	var inst BackendInstance
-	var ipAddr, certFP, approvedBy, rejectedBy, rejectionReason, cedarVer, osInfo, arch *string
+	var ipAddr, certFP, csr, signedCert, approvedBy, rejectedBy, rejectionReason, cedarVer, osInfo, arch *string
 	var approvedAt, rejectedAt, lastHB *time.Time
 	var metadata []byte
 
 	err = r.pool.QueryRow(ctx, query,
 		req.InstanceID, req.Hostname, req.IPAddress, initialStatus,
-		req.CertFingerprint, req.ClusterSecretVerified,
+		req.CertFingerprint, req.ClusterSecretVerified, req.CSR,
 		req.CedarVersion, req.OSInfo, req.Arch, metadataJSON,
 		autoApprovedAt, autoApprovedBy,
 	).Scan(
 		&inst.ID, &inst.InstanceID, &inst.Hostname, &ipAddr, &inst.Status,
-		&certFP, &inst.ClusterSecretVerified,
+		&certFP, &inst.ClusterSecretVerified, &csr, &signedCert,
 		&inst.RequestedAt, &approvedAt, &approvedBy,
 		&rejectedAt, &rejectedBy, &rejectionReason,
 		&cedarVer, &osInfo, &arch, &lastHB, &metadata,
@@ -153,6 +156,12 @@ func (r *BackendInstanceRepo) Register(ctx context.Context, req BackendInstanceR
 	}
 	if certFP != nil {
 		inst.CertFingerprint = *certFP
+	}
+	if csr != nil {
+		inst.CSR = *csr
+	}
+	if signedCert != nil {
+		inst.SignedCertificate = *signedCert
 	}
 	if approvedAt != nil {
 		inst.ApprovedAt = approvedAt
@@ -208,7 +217,7 @@ func (r *BackendInstanceRepo) UpdateHeartbeat(ctx context.Context, instanceID st
 			metadata = $9
 		WHERE instance_id = $1
 		RETURNING id, instance_id, hostname, ip_address, status,
-		          cert_fingerprint, cluster_secret_verified,
+		          cert_fingerprint, cluster_secret_verified, csr, signed_certificate,
 		          requested_at, approved_at, approved_by,
 		          rejected_at, rejected_by, rejection_reason,
 		          cedar_version, os_info, arch, last_heartbeat, metadata,
@@ -216,7 +225,7 @@ func (r *BackendInstanceRepo) UpdateHeartbeat(ctx context.Context, instanceID st
 	`
 
 	var inst BackendInstance
-	var ipAddr, certFP, approvedBy, rejectedBy, rejectionReason, cedarVer, osInfo, arch *string
+	var ipAddr, certFP, csr, signedCert, approvedBy, rejectedBy, rejectionReason, cedarVer, osInfo, arch *string
 	var approvedAt, rejectedAt, lastHB *time.Time
 	var metadata []byte
 
@@ -226,7 +235,7 @@ func (r *BackendInstanceRepo) UpdateHeartbeat(ctx context.Context, instanceID st
 		req.CedarVersion, req.OSInfo, req.Arch, metadataJSON,
 	).Scan(
 		&inst.ID, &inst.InstanceID, &inst.Hostname, &ipAddr, &inst.Status,
-		&certFP, &inst.ClusterSecretVerified,
+		&certFP, &inst.ClusterSecretVerified, &csr, &signedCert,
 		&inst.RequestedAt, &approvedAt, &approvedBy,
 		&rejectedAt, &rejectedBy, &rejectionReason,
 		&cedarVer, &osInfo, &arch, &lastHB, &metadata,
@@ -242,6 +251,12 @@ func (r *BackendInstanceRepo) UpdateHeartbeat(ctx context.Context, instanceID st
 	}
 	if certFP != nil {
 		inst.CertFingerprint = *certFP
+	}
+	if csr != nil {
+		inst.CSR = *csr
+	}
+	if signedCert != nil {
+		inst.SignedCertificate = *signedCert
 	}
 	if approvedAt != nil {
 		inst.ApprovedAt = approvedAt
@@ -281,7 +296,7 @@ func (r *BackendInstanceRepo) UpdateHeartbeat(ctx context.Context, instanceID st
 func (r *BackendInstanceRepo) GetByInstanceID(ctx context.Context, instanceID string) (*BackendInstance, error) {
 	query := `
 		SELECT id, instance_id, hostname, ip_address, status,
-		       cert_fingerprint, cluster_secret_verified,
+		       cert_fingerprint, cluster_secret_verified, csr, signed_certificate,
 		       requested_at, approved_at, approved_by,
 		       rejected_at, rejected_by, rejection_reason,
 		       cedar_version, os_info, arch, last_heartbeat, metadata,
@@ -291,13 +306,13 @@ func (r *BackendInstanceRepo) GetByInstanceID(ctx context.Context, instanceID st
 	`
 
 	var inst BackendInstance
-	var ipAddr, certFP, approvedBy, rejectedBy, rejectionReason, cedarVer, osInfo, arch *string
+	var ipAddr, certFP, csr, signedCert, approvedBy, rejectedBy, rejectionReason, cedarVer, osInfo, arch *string
 	var approvedAt, rejectedAt, lastHB *time.Time
 	var metadata []byte
 
 	err := r.pool.QueryRow(ctx, query, instanceID).Scan(
 		&inst.ID, &inst.InstanceID, &inst.Hostname, &ipAddr, &inst.Status,
-		&certFP, &inst.ClusterSecretVerified,
+		&certFP, &inst.ClusterSecretVerified, &csr, &signedCert,
 		&inst.RequestedAt, &approvedAt, &approvedBy,
 		&rejectedAt, &rejectedBy, &rejectionReason,
 		&cedarVer, &osInfo, &arch, &lastHB, &metadata,
@@ -316,6 +331,12 @@ func (r *BackendInstanceRepo) GetByInstanceID(ctx context.Context, instanceID st
 	}
 	if certFP != nil {
 		inst.CertFingerprint = *certFP
+	}
+	if csr != nil {
+		inst.CSR = *csr
+	}
+	if signedCert != nil {
+		inst.SignedCertificate = *signedCert
 	}
 	if approvedAt != nil {
 		inst.ApprovedAt = approvedAt
@@ -359,7 +380,7 @@ func (r *BackendInstanceRepo) List(ctx context.Context, status *BackendInstanceS
 	if status != nil {
 		query = `
 			SELECT id, instance_id, hostname, ip_address, status,
-			       cert_fingerprint, cluster_secret_verified,
+			       cert_fingerprint, cluster_secret_verified, csr, signed_certificate,
 			       requested_at, approved_at, approved_by,
 			       rejected_at, rejected_by, rejection_reason,
 			       cedar_version, os_info, arch, last_heartbeat, metadata,
@@ -372,7 +393,7 @@ func (r *BackendInstanceRepo) List(ctx context.Context, status *BackendInstanceS
 	} else {
 		query = `
 			SELECT id, instance_id, hostname, ip_address, status,
-			       cert_fingerprint, cluster_secret_verified,
+			       cert_fingerprint, cluster_secret_verified, csr, signed_certificate,
 			       requested_at, approved_at, approved_by,
 			       rejected_at, rejected_by, rejection_reason,
 			       cedar_version, os_info, arch, last_heartbeat, metadata,
@@ -397,13 +418,13 @@ func (r *BackendInstanceRepo) List(ctx context.Context, status *BackendInstanceS
 	var instances []BackendInstance
 	for rows.Next() {
 		var inst BackendInstance
-		var ipAddr, certFP, approvedBy, rejectedBy, rejectionReason, cedarVer, osInfo, arch *string
+		var ipAddr, certFP, csr, signedCert, approvedBy, rejectedBy, rejectionReason, cedarVer, osInfo, arch *string
 		var approvedAt, rejectedAt, lastHB *time.Time
 		var metadata []byte
 
 		err := rows.Scan(
 			&inst.ID, &inst.InstanceID, &inst.Hostname, &ipAddr, &inst.Status,
-			&certFP, &inst.ClusterSecretVerified,
+			&certFP, &inst.ClusterSecretVerified, &csr, &signedCert,
 			&inst.RequestedAt, &approvedAt, &approvedBy,
 			&rejectedAt, &rejectedBy, &rejectionReason,
 			&cedarVer, &osInfo, &arch, &lastHB, &metadata,
@@ -419,6 +440,12 @@ func (r *BackendInstanceRepo) List(ctx context.Context, status *BackendInstanceS
 		}
 		if certFP != nil {
 			inst.CertFingerprint = *certFP
+		}
+		if csr != nil {
+			inst.CSR = *csr
+		}
+		if signedCert != nil {
+			inst.SignedCertificate = *signedCert
 		}
 		if approvedAt != nil {
 			inst.ApprovedAt = approvedAt
@@ -458,15 +485,16 @@ func (r *BackendInstanceRepo) List(ctx context.Context, status *BackendInstanceS
 }
 
 // Approve approves a pending backend instance
-func (r *BackendInstanceRepo) Approve(ctx context.Context, instanceID string, approvedBy string) (*BackendInstance, error) {
+func (r *BackendInstanceRepo) Approve(ctx context.Context, instanceID string, approvedBy string, signedCert string) (*BackendInstance, error) {
 	query := `
 		UPDATE backend_instances SET
 			status = $2,
 			approved_at = NOW(),
-			approved_by = $3
+			approved_by = $3,
+			signed_certificate = $4
 		WHERE instance_id = $1 AND status = 'pending'
 		RETURNING id, instance_id, hostname, ip_address, status,
-		          cert_fingerprint, cluster_secret_verified,
+		          cert_fingerprint, cluster_secret_verified, csr, signed_certificate,
 		          requested_at, approved_at, approved_by,
 		          rejected_at, rejected_by, rejection_reason,
 		          cedar_version, os_info, arch, last_heartbeat, metadata,
@@ -474,13 +502,13 @@ func (r *BackendInstanceRepo) Approve(ctx context.Context, instanceID string, ap
 	`
 
 	var inst BackendInstance
-	var ipAddr, certFP, approvedByOut, rejectedBy, rejectionReason, cedarVer, osInfo, arch *string
+	var ipAddr, certFP, csr, signedCertOut, approvedByOut, rejectedBy, rejectionReason, cedarVer, osInfo, arch *string
 	var approvedAt, rejectedAt, lastHB *time.Time
 	var metadata []byte
 
-	err := r.pool.QueryRow(ctx, query, instanceID, BackendStatusApproved, approvedBy).Scan(
+	err := r.pool.QueryRow(ctx, query, instanceID, BackendStatusApproved, approvedBy, signedCert).Scan(
 		&inst.ID, &inst.InstanceID, &inst.Hostname, &ipAddr, &inst.Status,
-		&certFP, &inst.ClusterSecretVerified,
+		&certFP, &inst.ClusterSecretVerified, &csr, &signedCertOut,
 		&inst.RequestedAt, &approvedAt, &approvedByOut,
 		&rejectedAt, &rejectedBy, &rejectionReason,
 		&cedarVer, &osInfo, &arch, &lastHB, &metadata,
@@ -499,6 +527,12 @@ func (r *BackendInstanceRepo) Approve(ctx context.Context, instanceID string, ap
 	}
 	if certFP != nil {
 		inst.CertFingerprint = *certFP
+	}
+	if csr != nil {
+		inst.CSR = *csr
+	}
+	if signedCertOut != nil {
+		inst.SignedCertificate = *signedCertOut
 	}
 	if approvedAt != nil {
 		inst.ApprovedAt = approvedAt
@@ -831,4 +865,3 @@ func (r *BackendInstanceRepo) SuspendStale(ctx context.Context, staleAfter time.
 	}
 	return int(result.RowsAffected()), nil
 }
-
