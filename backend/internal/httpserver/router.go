@@ -1024,13 +1024,18 @@ func (a *API) handleCreateApp(w http.ResponseWriter, r *http.Request) {
 
 	// Log application creation to audit trail
 	if a.audits != nil {
+		user := GetUserFromContext(r.Context())
+		actor := "api"
+		if user != nil {
+			actor = user.ID
+		}
 		auditCtx := map[string]any{
 			"name":              req.Name,
 			"namespace_id":      req.NamespaceID,
 			"description":       req.Description,
 			"approval_required": approvalRequired,
 		}
-		_ = a.audits.Log(r.Context(), &id, "api", "application.create", req.Name, "", auditCtx)
+		_ = a.audits.Log(r.Context(), &id, actor, "application.create", req.Name, "", auditCtx)
 	}
 
 	json.NewEncoder(w).Encode(map[string]any{"id": id})
@@ -1166,11 +1171,16 @@ func (a *API) handleCreateNamespace(w http.ResponseWriter, r *http.Request) {
 
 	// Log namespace creation to audit trail
 	if a.audits != nil {
+		user := GetUserFromContext(r.Context())
+		actor := "api"
+		if user != nil {
+			actor = user.ID
+		}
 		auditCtx := map[string]any{
 			"name":        req.Name,
 			"description": req.Description,
 		}
-		_ = a.audits.Log(r.Context(), nil, "api", "namespace.create", req.Name, "", auditCtx)
+		_ = a.audits.Log(r.Context(), nil, actor, "namespace.create", req.Name, "", auditCtx)
 	}
 
 	json.NewEncoder(w).Encode(map[string]any{"id": id})
@@ -1246,6 +1256,11 @@ func (a *API) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 
 	// Log policy creation/update to audit trail
 	if a.audits != nil {
+		user := GetUserFromContext(r.Context())
+		actor := "api"
+		if user != nil {
+			actor = user.ID
+		}
 		auditAction := "policy.create"
 		auditCtx := map[string]any{
 			"policy_name": req.Name,
@@ -1253,7 +1268,7 @@ func (a *API) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 			"activated":   req.Activate,
 			"status":      status,
 		}
-		_ = a.audits.Log(r.Context(), &appID, "api", auditAction, req.Name, "", auditCtx)
+		_ = a.audits.Log(r.Context(), &appID, actor, auditAction, req.Name, "", auditCtx)
 	}
 
 	json.NewEncoder(w).Encode(map[string]any{"policy_id": policyID, "version": version, "status": status})
@@ -1367,7 +1382,7 @@ func (a *API) handleApprovePolicy(w http.ResponseWriter, r *http.Request) {
 			"version":   version,
 			"policy_id": policyID,
 		}
-		_ = a.audits.Log(r.Context(), &appID, "api", "policy.approve", strconv.FormatInt(policyID, 10), "", auditCtx)
+		_ = a.audits.Log(r.Context(), &appID, approver, "policy.approve", strconv.FormatInt(policyID, 10), "", auditCtx)
 	}
 
 	json.NewEncoder(w).Encode(map[string]string{"status": "approved"})
@@ -1424,11 +1439,16 @@ func (a *API) handleActivatePolicy(w http.ResponseWriter, r *http.Request) {
 
 	// Audit
 	if a.audits != nil {
+		user := GetUserFromContext(r.Context())
+		actor := "api"
+		if user != nil {
+			actor = user.ID
+		}
 		auditCtx := map[string]any{
 			"version":   version,
 			"policy_id": policyID,
 		}
-		_ = a.audits.Log(r.Context(), &appID, "api", "policy.activate", strconv.FormatInt(policyID, 10), "", auditCtx)
+		_ = a.audits.Log(r.Context(), &appID, actor, "policy.activate", strconv.FormatInt(policyID, 10), "", auditCtx)
 	}
 
 	json.NewEncoder(w).Encode(map[string]string{"status": "active"})
@@ -1472,7 +1492,12 @@ func (a *API) handleDeletePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if a.audits != nil {
-		_ = a.audits.Log(r.Context(), &appID, "api", "policy.delete", strconv.FormatInt(policyID, 10), "", map[string]any{"status": status})
+		user := GetUserFromContext(r.Context())
+		actor := "api"
+		if user != nil {
+			actor = user.ID
+		}
+		_ = a.audits.Log(r.Context(), &appID, actor, "policy.delete", strconv.FormatInt(policyID, 10), "", map[string]any{"status": status})
 	}
 
 	json.NewEncoder(w).Encode(map[string]string{"status": status})
@@ -1521,7 +1546,7 @@ func (a *API) handleApproveDeletePolicy(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if a.audits != nil {
-		_ = a.audits.Log(r.Context(), &appID, "api", "policy.approve_delete", strconv.FormatInt(policyID, 10), "", nil)
+		_ = a.audits.Log(r.Context(), &appID, approver, "policy.approve_delete", strconv.FormatInt(policyID, 10), "", nil)
 	}
 
 	json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
@@ -1575,6 +1600,11 @@ func (a *API) handleUpsertEntity(w http.ResponseWriter, r *http.Request) {
 
 	// Log entity upsert to audit trail
 	if a.audits != nil {
+		user := GetUserFromContext(r.Context())
+		actor := "api"
+		if user != nil {
+			actor = user.ID
+		}
 		entityRef := req.Type + "::" + req.ID
 		auditCtx := map[string]any{
 			"entity_type": req.Type,
@@ -1583,7 +1613,7 @@ func (a *API) handleUpsertEntity(w http.ResponseWriter, r *http.Request) {
 		if len(req.Parents) > 0 {
 			auditCtx["parents"] = req.Parents
 		}
-		_ = a.audits.Log(r.Context(), &appID, "api", "entity.upsert", entityRef, "", auditCtx)
+		_ = a.audits.Log(r.Context(), &appID, actor, "entity.upsert", entityRef, "", auditCtx)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -1693,11 +1723,16 @@ func (a *API) handleCreateSchema(w http.ResponseWriter, r *http.Request) {
 
 	// Log schema creation to audit trail
 	if a.audits != nil {
+		user := GetUserFromContext(r.Context())
+		actor := "api"
+		if user != nil {
+			actor = user.ID
+		}
 		auditCtx := map[string]any{
 			"version":   version,
 			"activated": req.Activate,
 		}
-		_ = a.audits.Log(r.Context(), &appID, "api", "schema.create", "", "", auditCtx)
+		_ = a.audits.Log(r.Context(), &appID, actor, "schema.create", "", "", auditCtx)
 	}
 
 	json.NewEncoder(w).Encode(map[string]any{"schema_id": schemaID, "version": version})
@@ -1774,10 +1809,15 @@ func (a *API) handleActivateSchema(w http.ResponseWriter, r *http.Request) {
 
 	// Log schema activation to audit trail
 	if a.audits != nil {
+		user := GetUserFromContext(r.Context())
+		actor := "api"
+		if user != nil {
+			actor = user.ID
+		}
 		auditCtx := map[string]any{
 			"version": req.Version,
 		}
-		_ = a.audits.Log(r.Context(), &appID, "api", "schema.activate", "", "", auditCtx)
+		_ = a.audits.Log(r.Context(), &appID, actor, "schema.activate", "", "", auditCtx)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
