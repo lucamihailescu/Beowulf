@@ -83,7 +83,7 @@ export default function Audit() {
   function formatContext(ctx: Record<string, unknown> | undefined) {
     if (!ctx) return null;
     return (
-      <pre style={{ margin: 0, fontSize: 11, maxHeight: 120, overflow: "auto", background: "#f5f5f5", padding: 4, borderRadius: 4 }}>
+      <pre style={{ margin: 0, fontSize: 11, maxHeight: 120, overflow: "auto", background: "#f5f5f5", padding: 4, borderRadius: 4, color: "#333" }}>
         {JSON.stringify(ctx, null, 2)}
       </pre>
     );

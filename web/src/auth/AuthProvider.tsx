@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from 'react';
 import {
   PublicClientApplication,
   AccountInfo,
@@ -147,16 +147,17 @@ const MSALAuthContent: React.FC<{ children: React.ReactNode }> = ({ children }) 
   }, [instance, accounts, isAuthenticated]);
 
   // Keep refs updated with latest functions
-  useEffect(() => {
+  useLayoutEffect(() => {
     tokenGetterRef.current = getAccessToken;
   }, [getAccessToken]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     loginRef.current = login;
   }, [login]);
 
   // Configure API client once with stable wrapper functions
-  useEffect(() => {
+  // Use useLayoutEffect to ensure this runs before child components mount and make API calls
+  useLayoutEffect(() => {
     if (!apiConfigured.current) {
       configureAuth({
         getToken: () => tokenGetterRef.current(),
@@ -231,7 +232,8 @@ const KerberosAuthContent: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   // Configure API client for Kerberos (no token, uses credentials: include)
-  useEffect(() => {
+  // Use useLayoutEffect to ensure this runs before child components mount and make API calls
+  useLayoutEffect(() => {
     if (!apiConfigured.current) {
       configureAuth({
         getToken: async () => null,
@@ -332,7 +334,8 @@ const LDAPAuthContent: React.FC<{ children: React.ReactNode }> = ({ children }) 
   }, []);
 
   // Configure API client once - token getter reads from sessionStorage which is always current
-  useEffect(() => {
+  // Use useLayoutEffect to ensure this runs before child components mount and make API calls
+  useLayoutEffect(() => {
     if (!apiConfigured.current) {
       configureAuth({
         getToken: getAccessToken,
