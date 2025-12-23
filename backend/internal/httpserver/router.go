@@ -823,8 +823,12 @@ func (a *API) handleListLiveBackends(w http.ResponseWriter, r *http.Request) {
 			isStale = time.Since(*inst.LastHeartbeat) > 35*time.Second
 		}
 		if !isStale {
-			// Use the hostname (container ID) which Docker DNS can resolve
-			response.WriteString(fmt.Sprintf("server %s:8080;\n", inst.Hostname))
+			// Use IP address if available (for remote backends), otherwise fallback to hostname
+			target := inst.Hostname
+			if inst.IPAddress != "" {
+				target = inst.IPAddress
+			}
+			response.WriteString(fmt.Sprintf("server %s:8080;\n", target))
 			liveCount++
 		}
 	}

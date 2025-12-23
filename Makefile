@@ -30,7 +30,7 @@ compose-up:
 	docker compose up -d --build db redis
 	docker compose run --rm migrate
 	docker compose run --rm seed
-	docker compose up -d --build backend web
+	docker compose up -d --build backend web load-balancer
 
 compose-down:
 	docker compose down

@@ -273,6 +273,13 @@ func (a *API) handleGetIdentityProvider(w http.ResponseWriter, r *http.Request) 
 
 	provider := a.settings.GetIdentityProvider(ctx)
 
+	// Fallback to environment configuration if DB setting is none
+	if provider == "none" {
+		if a.cfg.AuthMode == "jwt" {
+			provider = "entra"
+		}
+	}
+
 	// Get additional details based on provider
 	var details map[string]interface{}
 
@@ -298,8 +305,21 @@ func (a *API) handleGetIdentityProvider(w http.ResponseWriter, r *http.Request) 
 				"tenant_id": config.TenantID,
 				"client_id": config.ClientID,
 			}
+		} else if a.cfg.AuthMode == "jwt" {
+			// Use env vars if DB config is missing but AuthMode is jwt
+			details = map[string]interface{}{
+				"provider":  "entra",
+				"tenant_id": a.cfg.AzureTenantID,
+				"client_id": a.cfg.AzureClientID,
+			}
 		}
 	default:
+		details = map[string]interface{}{
+			"provider": "none",
+		}
+	}
+
+	if details == nil {
 		details = map[string]interface{}{
 			"provider": "none",
 		}
@@ -513,12 +533,12 @@ func adConfigToLDAPConfig(config *storage.ADConfig) *ldap.Config {
 
 // SessionInfo represents the current user session.
 type SessionInfo struct {
-	UserID    string   `json:"user_id"`
-	Name      string   `json:"name"`
-	Email     string   `json:"email"`
-	Groups    []string `json:"groups"`
-	AuthType  string   `json:"auth_type"` // "entra", "ldap", "kerberos", "anonymous"
-	LoggedIn  bool     `json:"logged_in"`
+	UserID   string   `json:"user_id"`
+	Name     string   `json:"name"`
+	Email    string   `json:"email"`
+	Groups   []string `json:"groups"`
+	AuthType string   `json:"auth_type"` // "entra", "ldap", "kerberos", "anonymous"
+	LoggedIn bool     `json:"logged_in"`
 }
 
 // handleGetSession returns the current user's session info and logs the login event.
@@ -550,9 +570,9 @@ func (a *API) handleGetSession(w http.ResponseWriter, r *http.Request) {
 				if iss, ok := claims["iss"].(string); ok {
 					if iss == "cedar-ldap" {
 						authType = "ldap"
-					} else if iss != "" && (iss == "https://login.microsoftonline.com" || 
-					           (len(iss) > 30 && iss[:30] == "https://login.microsoftonline")) ||
-					           (len(iss) > 25 && iss[:25] == "https://sts.windows.net/") {
+					} else if iss != "" && (iss == "https://login.microsoftonline.com" ||
+						(len(iss) > 30 && iss[:30] == "https://login.microsoftonline")) ||
+						(len(iss) > 25 && iss[:25] == "https://sts.windows.net/") {
 						authType = "entra"
 					}
 				}
