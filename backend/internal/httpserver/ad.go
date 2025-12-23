@@ -60,6 +60,11 @@ func (a *API) handleUpdateADConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Refresh auth middleware
+	if a.authMiddleware != nil {
+		a.authMiddleware.Refresh(a.cfg, a.settings)
+	}
+
 	// Update the LDAP client configuration if we have one
 	if a.ldapClient != nil {
 		ldapConfig := adConfigToLDAPConfig(&req)

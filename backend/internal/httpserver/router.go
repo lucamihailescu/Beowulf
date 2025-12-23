@@ -195,6 +195,7 @@ type API struct {
 	instanceRegistry    *storage.InstanceRegistry
 	instanceID          string
 	startedAt           time.Time
+	authMiddleware      *AuthMiddleware
 }
 
 // DBPinger interface for database health checks
@@ -309,6 +310,7 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 	if err != nil {
 		panic("failed to create auth middleware: " + err.Error())
 	}
+	api.authMiddleware = authMiddleware
 	r.Use(authMiddleware.Middleware)
 
 	// Initialize rate limiter (must be after auth middleware to access user context)
@@ -2301,6 +2303,11 @@ func (a *API) handleSaveEntraSettings(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
+	}
+
+	// Refresh auth middleware
+	if a.authMiddleware != nil {
+		a.authMiddleware.Refresh(a.cfg, a.settings)
 	}
 
 	// Update the Entra client with new credentials

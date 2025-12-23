@@ -3,9 +3,11 @@ package httpserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/httprate"
@@ -42,6 +44,7 @@ func GetUserFromContext(ctx context.Context) *UserContext {
 
 // AuthMiddleware provides authentication middleware based on configuration.
 type AuthMiddleware struct {
+	mu            sync.RWMutex
 	mode          string
 	apiKey        string
 	jwtValidator  *JWTValidator
@@ -53,7 +56,6 @@ type AuthMiddleware struct {
 // It first checks the database for auth settings (Entra/AD), then falls back to environment variables.
 func NewAuthMiddleware(cfg config.Config, settings *storage.SettingsRepo) (*AuthMiddleware, error) {
 	am := &AuthMiddleware{
-		mode:   strings.ToLower(cfg.AuthMode),
 		apiKey: cfg.APIKey,
 	}
 
@@ -63,6 +65,23 @@ func NewAuthMiddleware(cfg config.Config, settings *storage.SettingsRepo) (*Auth
 		ldapKey = []byte("cedar-ldap-jwt-secret-key-32bytes")
 	}
 	am.ldapSignKey = ldapKey
+
+	am.configure(cfg, settings)
+
+	return am, nil
+}
+
+// Refresh reloads the authentication configuration from the database.
+func (am *AuthMiddleware) Refresh(cfg config.Config, settings *storage.SettingsRepo) {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	am.configure(cfg, settings)
+}
+
+func (am *AuthMiddleware) configure(cfg config.Config, settings *storage.SettingsRepo) {
+	am.mode = strings.ToLower(cfg.AuthMode)
+	am.jwtValidator = nil
+	am.kerbValidator = nil
 
 	// Check database for auth settings - these override environment variables
 	if settings != nil {
@@ -140,8 +159,6 @@ func NewAuthMiddleware(cfg config.Config, settings *storage.SettingsRepo) (*Auth
 		log.Printf("Unknown auth mode: %s, falling back to none", cfg.AuthMode)
 		am.mode = "none"
 	}
-
-	return am, nil
 }
 
 // Middleware returns an http.Handler middleware that performs authentication.
@@ -154,94 +171,89 @@ func (am *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
+		am.mu.RLock()
+		mode := am.mode
+		apiKey := am.apiKey
+
+		var user *UserContext
+		var authErr error
+		var isAnonymous bool
+
 		// Skip auth for cluster management, SSE, settings, auth config, and identity provider endpoints
 		// These are needed for: load-balancer, backend registration, dashboard, and initial setup
-		if strings.HasPrefix(path, "/v1/cluster/") || 
-		   strings.HasPrefix(path, "/v1/settings/") || 
-		   strings.HasPrefix(path, "/v1/auth/") ||
-		   path == "/v1/events" ||
-		   path == "/v1/identity-provider" {
+		if strings.HasPrefix(path, "/v1/cluster/") ||
+			strings.HasPrefix(path, "/v1/settings/") ||
+			strings.HasPrefix(path, "/v1/auth/") ||
+			path == "/v1/events" ||
+			path == "/v1/identity-provider" {
 			// Allow anonymous access but still try to extract user if token present
-			if am.mode != "none" && am.mode != "" {
-				if user := am.tryExtractUser(r); user != nil {
-					ctx := context.WithValue(r.Context(), UserContextKey, user)
-					next.ServeHTTP(w, r.WithContext(ctx))
-					return
+			if mode != "none" && mode != "" {
+				if u := am.tryExtractUser(r); u != nil {
+					user = u
 				}
 			}
-			// No token or auth disabled - use anonymous
-			ctx := context.WithValue(r.Context(), UserContextKey, &UserContext{
-				ID:   "anonymous",
-				Name: "Anonymous User",
-			})
-			next.ServeHTTP(w, r.WithContext(ctx))
-			return
-		}
-
-		// Check for API Key Authentication
-		if am.apiKey != "" {
+			if user == nil {
+				isAnonymous = true
+			}
+		} else if apiKey != "" && r.Header.Get("X-API-Key") != "" {
+			// Check for API Key Authentication
 			if key := r.Header.Get("X-API-Key"); key != "" {
-				if key == am.apiKey {
+				if key == apiKey {
 					// Enforce Read-Only for API Key
 					if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
-						w.Header().Set("Content-Type", "application/json")
-						w.WriteHeader(http.StatusForbidden)
-						_ = json.NewEncoder(w).Encode(map[string]string{
-							"error": "API Key allows read-only access only",
-						})
-						return
+						authErr = fmt.Errorf("API Key allows read-only access only")
+					} else {
+						// Authenticated via API Key
+						user = &UserContext{
+							ID:     "api-key",
+							Name:   "External System",
+							Groups: []string{"ReadOnly"},
+						}
 					}
-
-					// Authenticated via API Key
-					ctx := context.WithValue(r.Context(), UserContextKey, &UserContext{
-						ID:     "api-key",
-						Name:   "External System",
-						Groups: []string{"ReadOnly"},
-					})
-					next.ServeHTTP(w, r.WithContext(ctx))
-					return
+				} else {
+					authErr = fmt.Errorf("Invalid API Key")
 				}
+			}
+		} else if mode == "none" || mode == "" {
+			// If auth is disabled, create anonymous user and continue
+			isAnonymous = true
+		} else {
+			switch mode {
+			case "jwt":
+				user, authErr = am.validateJWT(r)
+			case "kerberos":
+				user, authErr = am.validateKerberos(r)
+			case "ldap":
+				user, authErr = am.validateLDAPToken(r)
+			case "ldap+kerberos":
+				// Try Kerberos first (SSO), fall back to LDAP token
+				user, authErr = am.validateKerberos(r)
+				if user == nil && authErr == nil {
+					user, authErr = am.validateLDAPToken(r)
+				}
+			}
+		}
+		am.mu.RUnlock()
 
-				// Invalid key provided - reject immediately
+		if authErr != nil {
+			if authErr.Error() == "API Key allows read-only access only" {
 				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusUnauthorized)
+				w.WriteHeader(http.StatusForbidden)
 				_ = json.NewEncoder(w).Encode(map[string]string{
-					"error": "Invalid API Key",
+					"error": authErr.Error(),
 				})
 				return
 			}
+			am.handleAuthError(w, r, authErr)
+			return
 		}
 
-		// If auth is disabled, create anonymous user and continue
-		if am.mode == "none" || am.mode == "" {
+		if isAnonymous {
 			ctx := context.WithValue(r.Context(), UserContextKey, &UserContext{
 				ID:   "anonymous",
 				Name: "Anonymous User",
 			})
 			next.ServeHTTP(w, r.WithContext(ctx))
-			return
-		}
-
-		var user *UserContext
-		var err error
-
-		switch am.mode {
-		case "jwt":
-			user, err = am.validateJWT(r)
-		case "kerberos":
-			user, err = am.validateKerberos(r)
-		case "ldap":
-			user, err = am.validateLDAPToken(r)
-		case "ldap+kerberos":
-			// Try Kerberos first (SSO), fall back to LDAP token
-			user, err = am.validateKerberos(r)
-			if user == nil && err == nil {
-				user, err = am.validateLDAPToken(r)
-			}
-		}
-
-		if err != nil {
-			am.handleAuthError(w, r, err)
 			return
 		}
 
@@ -376,7 +388,11 @@ func getClaimString(claims jwt.MapClaims, key string) string {
 func (am *AuthMiddleware) handleAuthError(w http.ResponseWriter, _ *http.Request, err error) {
 	w.Header().Set("Content-Type", "application/json")
 
-	switch am.mode {
+	am.mu.RLock()
+	mode := am.mode
+	am.mu.RUnlock()
+
+	switch mode {
 	case "jwt":
 		w.Header().Set("WWW-Authenticate", "Bearer")
 	case "kerberos":
