@@ -1,15 +1,8 @@
 package httpserver
 
 import (
-	"context"
-	"crypto/rand"
-	"crypto/x509"
 	"encoding/json"
-	"encoding/pem"
-	"fmt"
-	"math/big"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -23,7 +16,6 @@ type backendInstanceRegisterRequest struct {
 	IPAddress             string                 `json:"ip_address,omitempty"`
 	CertFingerprint       string                 `json:"cert_fingerprint,omitempty"`
 	ClusterSecretVerified bool                   `json:"cluster_secret_verified"`
-	CSR                   string                 `json:"csr,omitempty"`
 	CedarVersion          string                 `json:"cedar_version,omitempty"`
 	OSInfo                string                 `json:"os_info,omitempty"`
 	Arch                  string                 `json:"arch,omitempty"`
@@ -65,7 +57,6 @@ func (a *API) handleRegisterBackendInstance(w http.ResponseWriter, r *http.Reque
 		IPAddress:             req.IPAddress,
 		CertFingerprint:       req.CertFingerprint,
 		ClusterSecretVerified: req.ClusterSecretVerified,
-		CSR:                   req.CSR,
 		CedarVersion:          req.CedarVersion,
 		OSInfo:                req.OSInfo,
 		Arch:                  req.Arch,
@@ -171,31 +162,7 @@ func (a *API) handleApproveBackendInstance(w http.ResponseWriter, r *http.Reques
 		approvedBy = user.ID
 	}
 
-	// Fetch instance to get CSR
-	instance, err := a.backendInstanceRepo.GetByInstanceID(ctx, instanceID)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
-	if instance == nil {
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]string{"error": "instance not found"})
-		return
-	}
-
-	var signedCert string
-	if instance.CSR != "" {
-		// Try to sign CSR
-		signedCert, err = a.signBackendCSR(ctx, instance.CSR)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("failed to sign CSR: %v", err)})
-			return
-		}
-	}
-
-	instance, err = a.backendInstanceRepo.Approve(ctx, instanceID, approvedBy, signedCert)
+	instance, err := a.backendInstanceRepo.Approve(ctx, instanceID, approvedBy)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -419,77 +386,3 @@ func (a *API) handleUpdateApprovalRequired(w http.ResponseWriter, r *http.Reques
 	json.NewEncoder(w).Encode(cfg)
 }
 
-func (a *API) signBackendCSR(ctx context.Context, csrPEM string) (string, error) {
-	// Get CA config
-	authConfig, err := a.backendAuthRepo.Get(ctx)
-	if err != nil {
-		return "", fmt.Errorf("failed to get auth config: %w", err)
-	}
-	if authConfig == nil || authConfig.CACertificate == "" || authConfig.CAPrivateKey == "" {
-		// CA not configured, cannot sign
-		return "", nil
-	}
-
-	// Parse CA cert
-	block, _ := pem.Decode([]byte(authConfig.CACertificate))
-	if block == nil {
-		return "", fmt.Errorf("failed to decode CA certificate")
-	}
-	caCert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse CA certificate: %w", err)
-	}
-
-	// Parse CA private key
-	block, _ = pem.Decode([]byte(authConfig.CAPrivateKey))
-	if block == nil {
-		return "", fmt.Errorf("failed to decode CA private key")
-	}
-
-	var caKey interface{}
-	if block.Type == "RSA PRIVATE KEY" {
-		caKey, err = x509.ParsePKCS1PrivateKey(block.Bytes)
-	} else {
-		caKey, err = x509.ParsePKCS8PrivateKey(block.Bytes)
-	}
-	if err != nil {
-		return "", fmt.Errorf("failed to parse CA private key: %w", err)
-	}
-
-	// Parse CSR
-	block, _ = pem.Decode([]byte(csrPEM))
-	if block == nil {
-		return "", fmt.Errorf("failed to decode CSR")
-	}
-	csr, err := x509.ParseCertificateRequest(block.Bytes)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse CSR: %w", err)
-	}
-	if err := csr.CheckSignature(); err != nil {
-		return "", fmt.Errorf("invalid CSR signature: %w", err)
-	}
-
-	// Create certificate
-	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
-	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
-	if err != nil {
-		return "", fmt.Errorf("failed to generate serial number: %w", err)
-	}
-
-	template := x509.Certificate{
-		SerialNumber: serialNumber,
-		Subject:      csr.Subject,
-		NotBefore:    time.Now(),
-		NotAfter:     time.Now().AddDate(1, 0, 0), // 1 year validity
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-	}
-
-	certBytes, err := x509.CreateCertificate(rand.Reader, &template, caCert, csr.PublicKey, caKey)
-	if err != nil {
-		return "", fmt.Errorf("failed to create certificate: %w", err)
-	}
-
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certBytes})
-	return string(certPEM), nil
-}

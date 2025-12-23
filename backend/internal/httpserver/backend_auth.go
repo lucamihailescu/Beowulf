@@ -11,7 +11,6 @@ import (
 type backendAuthConfigRequest struct {
 	AuthMode      string `json:"auth_mode"`
 	CACertificate string `json:"ca_certificate,omitempty"`
-	CAPrivateKey  string `json:"ca_private_key,omitempty"`
 	SharedSecret  string `json:"shared_secret,omitempty"`
 }
 
@@ -83,7 +82,7 @@ func (a *API) handleUpdateBackendAuthConfig(w http.ResponseWriter, r *http.Reque
 
 	case storage.BackendAuthModeMTLS:
 		if req.CACertificate != "" {
-			if err := a.backendAuthRepo.UpdateCACertificate(ctx, req.CACertificate, req.CAPrivateKey, updatedBy); err != nil {
+			if err := a.backendAuthRepo.UpdateCACertificate(ctx, req.CACertificate, updatedBy); err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 				return
@@ -109,7 +108,6 @@ func (a *API) handleUploadCACertificate(w http.ResponseWriter, r *http.Request) 
 
 	var req struct {
 		CACertificate string `json:"ca_certificate"`
-		CAPrivateKey  string `json:"ca_private_key"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -129,7 +127,7 @@ func (a *API) handleUploadCACertificate(w http.ResponseWriter, r *http.Request) 
 		updatedBy = user.ID
 	}
 
-	if err := a.backendAuthRepo.UpdateCACertificate(ctx, req.CACertificate, req.CAPrivateKey, updatedBy); err != nil {
+	if err := a.backendAuthRepo.UpdateCACertificate(ctx, req.CACertificate, updatedBy); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
@@ -245,3 +243,4 @@ func (a *API) handleVerifyBackendAuth(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"error": "unknown auth mode"})
 	}
 }
+

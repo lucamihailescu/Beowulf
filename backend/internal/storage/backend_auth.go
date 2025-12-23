@@ -32,7 +32,6 @@ type BackendAuthConfig struct {
 
 	// mTLS fields
 	CACertificate  string     `json:"ca_certificate,omitempty"`
-	CAPrivateKey   string     `json:"-"` // Never expose private key
 	CASubject      string     `json:"ca_subject,omitempty"`
 	CAIssuer       string     `json:"ca_issuer,omitempty"`
 	CASerialNumber string     `json:"ca_serial_number,omitempty"`
@@ -71,7 +70,7 @@ func NewBackendAuthRepo(pool *pgxpool.Pool) *BackendAuthRepo {
 func (r *BackendAuthRepo) Get(ctx context.Context) (*BackendAuthConfig, error) {
 	query := `
 		SELECT id, auth_mode, shared_secret_hash, COALESCE(approval_required, false),
-		       ca_certificate, ca_private_key, ca_subject, ca_issuer, ca_serial_number,
+		       ca_certificate, ca_subject, ca_issuer, ca_serial_number,
 		       ca_not_before, ca_not_after, ca_fingerprint,
 		       updated_at, updated_by
 		FROM backend_auth_config
@@ -79,12 +78,12 @@ func (r *BackendAuthRepo) Get(ctx context.Context) (*BackendAuthConfig, error) {
 	`
 
 	var cfg BackendAuthConfig
-	var sharedSecretHash, caCert, caKey, caSubject, caIssuer, caSerial, caFingerprint, updatedBy *string
+	var sharedSecretHash, caCert, caSubject, caIssuer, caSerial, caFingerprint, updatedBy *string
 	var caNotBefore, caNotAfter *time.Time
 
 	err := r.pool.QueryRow(ctx, query).Scan(
 		&cfg.ID, &cfg.AuthMode, &sharedSecretHash, &cfg.ApprovalRequired,
-		&caCert, &caKey, &caSubject, &caIssuer, &caSerial,
+		&caCert, &caSubject, &caIssuer, &caSerial,
 		&caNotBefore, &caNotAfter, &caFingerprint,
 		&cfg.UpdatedAt, &updatedBy,
 	)
@@ -104,9 +103,6 @@ func (r *BackendAuthRepo) Get(ctx context.Context) (*BackendAuthConfig, error) {
 	}
 	if caCert != nil {
 		cfg.CACertificate = *caCert
-	}
-	if caKey != nil {
-		cfg.CAPrivateKey = *caKey
 	}
 	if caSubject != nil {
 		cfg.CASubject = *caSubject
@@ -188,7 +184,7 @@ func (r *BackendAuthRepo) UpdateSharedSecret(ctx context.Context, secret string,
 }
 
 // UpdateCACertificate updates the CA certificate for mTLS
-func (r *BackendAuthRepo) UpdateCACertificate(ctx context.Context, certPEM string, privateKeyPEM string, updatedBy string) error {
+func (r *BackendAuthRepo) UpdateCACertificate(ctx context.Context, certPEM string, updatedBy string) error {
 	// Parse and validate the certificate
 	block, _ := pem.Decode([]byte(certPEM))
 	if block == nil {
@@ -205,20 +201,6 @@ func (r *BackendAuthRepo) UpdateCACertificate(ctx context.Context, certPEM strin
 		return fmt.Errorf("certificate is not a CA certificate")
 	}
 
-	// Validate private key if provided
-	if privateKeyPEM != "" {
-		block, _ := pem.Decode([]byte(privateKeyPEM))
-		if block == nil {
-			return fmt.Errorf("failed to decode private key PEM block")
-		}
-		// Basic validation that it parses
-		if _, err := x509.ParsePKCS1PrivateKey(block.Bytes); err != nil {
-			if _, err := x509.ParsePKCS8PrivateKey(block.Bytes); err != nil {
-				return fmt.Errorf("failed to parse private key: %w", err)
-			}
-		}
-	}
-
 	// Calculate fingerprint
 	fingerprint := sha256.Sum256(cert.Raw)
 	fingerprintHex := hex.EncodeToString(fingerprint[:])
@@ -226,20 +208,18 @@ func (r *BackendAuthRepo) UpdateCACertificate(ctx context.Context, certPEM strin
 	query := `
 		UPDATE backend_auth_config
 		SET ca_certificate = $1,
-		    ca_private_key = COALESCE(NULLIF($2, ''), ca_private_key),
-		    ca_subject = $3,
-		    ca_issuer = $4,
-		    ca_serial_number = $5,
-		    ca_not_before = $6,
-		    ca_not_after = $7,
-		    ca_fingerprint = $8,
-		    updated_by = $9
+		    ca_subject = $2,
+		    ca_issuer = $3,
+		    ca_serial_number = $4,
+		    ca_not_before = $5,
+		    ca_not_after = $6,
+		    ca_fingerprint = $7,
+		    updated_by = $8
 		WHERE id = (SELECT id FROM backend_auth_config LIMIT 1)
 	`
 
 	_, err = r.pool.Exec(ctx, query,
 		certPEM,
-		privateKeyPEM,
 		cert.Subject.String(),
 		cert.Issuer.String(),
 		cert.SerialNumber.String(),
@@ -256,7 +236,6 @@ func (r *BackendAuthRepo) RemoveCACertificate(ctx context.Context, updatedBy str
 	query := `
 		UPDATE backend_auth_config
 		SET ca_certificate = NULL,
-		    ca_private_key = NULL,
 		    ca_subject = NULL,
 		    ca_issuer = NULL,
 		    ca_serial_number = NULL,
@@ -349,3 +328,4 @@ func (r *BackendAuthRepo) GetCACertPool(ctx context.Context) (*x509.CertPool, er
 
 	return pool, nil
 }
+

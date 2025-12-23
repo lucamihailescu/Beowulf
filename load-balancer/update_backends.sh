@@ -15,7 +15,7 @@ TEMP_GRPC_CONFIG="/tmp/grpc_upstreams.conf.tmp"
 
 # Use Docker DNS to reach any backend instance directly
 # This bypasses our dynamic upstream to avoid chicken-and-egg problem
-DISCOVERY_ENDPOINT="http://config-service:8080/v1/cluster/live-backends"
+DISCOVERY_ENDPOINT="http://backend:8080/v1/cluster/live-backends"
 
 # How often to check for changes (in seconds)
 CHECK_INTERVAL="${BACKEND_CHECK_INTERVAL:-10}"

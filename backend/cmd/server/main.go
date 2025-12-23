@@ -98,19 +98,13 @@ func main() {
 
 	authzSvc := authz.NewService(policyProvider, entityProvider)
 
-	// Read SERVICE_MODE
-	serviceMode := os.Getenv("SERVICE_MODE")
-	if serviceMode == "" {
-		serviceMode = "all"
-	}
-
 	// Create simulation service
 	simRepo := storage.NewSimulationRepo(db)
 	simSvc := simulation.NewService(simRepo, policyRepo, entityRepo, nil) // nil for audit log reader (falls back to sample data)
 
 	// Create instance registry for cluster discovery (requires Redis)
 	var instanceRegistry *storage.InstanceRegistry
-	if (serviceMode == "decision" || serviceMode == "all") && redisClient != nil {
+	if redisClient != nil {
 		hostname, _ := os.Hostname()
 		instanceID := fmt.Sprintf("%s-%d", hostname, time.Now().UnixNano()%10000)
 		instanceRegistry = storage.NewInstanceRegistry(redisClient, instanceID)
@@ -119,17 +113,14 @@ func main() {
 	}
 
 	// Start gRPC server
-	var grpcServer *internalgrpc.Server
-	if serviceMode == "decision" || serviceMode == "all" {
-		grpcServer = internalgrpc.NewServer(cfg, authzSvc)
-		go func() {
-			if err := grpcServer.Start(); err != nil {
-				log.Printf("gRPC server failed: %v", err)
-			}
-		}()
-	}
+	grpcServer := internalgrpc.NewServer(cfg, authzSvc)
+	go func() {
+		if err := grpcServer.Start(); err != nil {
+			log.Printf("gRPC server failed: %v", err)
+		}
+	}()
 
-	r := httpserver.NewRouter(cfg, authzSvc, appRepo, policyRepo, entityRepo, schemaRepo, auditRepo, namespaceRepo, settingsRepo, backendAuthRepo, backendInstanceRepo, cache, cache, db, instanceRegistry, simSvc, redisClient, serviceMode)
+	r := httpserver.NewRouter(cfg, authzSvc, appRepo, policyRepo, entityRepo, schemaRepo, auditRepo, namespaceRepo, settingsRepo, backendAuthRepo, backendInstanceRepo, cache, cache, db, instanceRegistry, simSvc, redisClient)
 
 	// Start instance registry heartbeat (after router sets the status function)
 	if instanceRegistry != nil {
@@ -220,10 +211,8 @@ func main() {
 	}
 
 	// Step 4: Stop gRPC server
-	if grpcServer != nil {
-		log.Printf("shutting down gRPC server...")
-		grpcServer.GracefulStop()
-	}
+	log.Printf("shutting down gRPC server...")
+	grpcServer.GracefulStop()
 
 	log.Printf("graceful shutdown complete")
 }
