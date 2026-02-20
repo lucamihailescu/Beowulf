@@ -5,11 +5,15 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"runtime"
 	"strconv"
+	"sync"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/status"
 
 	authzv1 "cedar/api/gen/v1"
 	"cedar/internal/authz"
@@ -22,6 +26,12 @@ type Server struct {
 	port         string
 	grpcServer   *grpc.Server
 }
+
+const (
+	maxBatchChecks      = 1000
+	defaultBatchWorkers = 16
+	minBatchWorkerCount = 1
+)
 
 func NewServer(cfg config.Config, service *authz.Service) *Server {
 	// Use a separate port for gRPC, e.g., 50051, or derive from config
@@ -102,18 +112,76 @@ func (s *Server) Check(ctx context.Context, req *authzv1.CheckRequest) (*authzv1
 }
 
 func (s *Server) BatchCheck(ctx context.Context, req *authzv1.BatchCheckRequest) (*authzv1.BatchCheckResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is required")
+	}
+	if len(req.Checks) > maxBatchChecks {
+		return nil, status.Errorf(codes.InvalidArgument, "batch size %d exceeds maximum %d", len(req.Checks), maxBatchChecks)
+	}
+	if len(req.Checks) == 0 {
+		return &authzv1.BatchCheckResponse{Results: []*authzv1.CheckResponse{}}, nil
+	}
+
 	results := make([]*authzv1.CheckResponse, len(req.Checks))
-	for i, check := range req.Checks {
-		res, err := s.Check(ctx, check)
-		if err != nil {
-			results[i] = &authzv1.CheckResponse{
-				Allowed: false,
-				Errors:  []string{err.Error()},
+
+	type batchJob struct {
+		idx   int
+		check *authzv1.CheckRequest
+	}
+
+	workerCount := runtime.GOMAXPROCS(0)
+	if workerCount < minBatchWorkerCount {
+		workerCount = minBatchWorkerCount
+	}
+	if workerCount > defaultBatchWorkers {
+		workerCount = defaultBatchWorkers
+	}
+	if workerCount > len(req.Checks) {
+		workerCount = len(req.Checks)
+	}
+
+	jobs := make(chan batchJob)
+	var wg sync.WaitGroup
+	wg.Add(workerCount)
+
+	for i := 0; i < workerCount; i++ {
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				// Respect cancellation to avoid unnecessary work.
+				if err := ctx.Err(); err != nil {
+					results[job.idx] = &authzv1.CheckResponse{
+						Allowed: false,
+						Errors:  []string{err.Error()},
+					}
+					continue
+				}
+
+				res, err := s.Check(ctx, job.check)
+				if err != nil {
+					results[job.idx] = &authzv1.CheckResponse{
+						Allowed: false,
+						Errors:  []string{err.Error()},
+					}
+					continue
+				}
+				results[job.idx] = res
 			}
-		} else {
-			results[i] = res
+		}()
+	}
+
+	for idx, check := range req.Checks {
+		select {
+		case <-ctx.Done():
+			close(jobs)
+			wg.Wait()
+			return nil, status.Error(codes.Canceled, ctx.Err().Error())
+		case jobs <- batchJob{idx: idx, check: check}:
 		}
 	}
+	close(jobs)
+	wg.Wait()
+
 	return &authzv1.BatchCheckResponse{Results: results}, nil
 }
 

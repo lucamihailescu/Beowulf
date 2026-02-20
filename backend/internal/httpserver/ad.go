@@ -13,6 +13,11 @@ import (
 	"cedar/internal/storage"
 )
 
+const (
+	adSearchDefaultLimit = 20
+	adSearchMaxLimit     = 50
+)
+
 // handleGetADConfig returns the Active Directory configuration (without sensitive data).
 func (a *API) handleGetADConfig(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -183,11 +188,16 @@ func (a *API) handleSearchADUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	limit := 20
+	limit := adSearchDefaultLimit
 	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
 		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
 			limit = l
 		}
+	}
+	if limit > adSearchMaxLimit {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("limit must be between 1 and %d", adSearchMaxLimit)})
+		return
 	}
 
 	if a.ldapClient == nil || !a.ldapClient.IsConfigured() {
@@ -218,11 +228,16 @@ func (a *API) handleSearchADGroups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	limit := 20
+	limit := adSearchDefaultLimit
 	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
 		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
 			limit = l
 		}
+	}
+	if limit > adSearchMaxLimit {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("limit must be between 1 and %d", adSearchMaxLimit)})
+		return
 	}
 
 	if a.ldapClient == nil || !a.ldapClient.IsConfigured() {

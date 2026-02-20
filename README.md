@@ -26,8 +26,7 @@ A full-stack implementation for managing [Cedar](https://github.com/cedar-policy
 - **Decision Logging** — Every authorization decision is logged with full context
 - **Administrative Actions** — Track policy, entity, and schema changes
 - **Filterable Logs** — Query audit logs by application, action type, or decision
-- **Compliance Ready** — Comprehensive audit trail for SOC2, HIPAA, and other compliance requirements
-
+- **Compliance Ready** — Comprehensive audit trails
 ### Performance & Scalability
 - **Redis Caching** — Cache policies and entities for fast authorization decisions
 - **L1/L2 Cache** — In-memory L1 cache with Redis L2 for sub-millisecond authorization

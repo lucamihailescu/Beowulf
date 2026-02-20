@@ -11,6 +11,7 @@ import (
 	cedar "github.com/cedar-policy/cedar-go"
 	gocache "github.com/patrickmn/go-cache"
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/sync/singleflight"
 
 	"cedar/internal/authz"
 )
@@ -26,6 +27,7 @@ type Cache struct {
 	local    *gocache.Cache
 	ttl      time.Duration
 	localTTL time.Duration
+	sf       singleflight.Group
 }
 
 func NewCache(rdb *redis.Client, ttl time.Duration) *Cache {
@@ -143,23 +145,50 @@ func (p *CachedPolicyProvider) ActivePolicies(ctx context.Context, applicationID
 		log.Printf("Redis get error: %v", err)
 	}
 
-	// 3. Fetch from DB
-	policies, err := p.base.ActivePolicies(ctx, applicationID)
+	// 3. Coalesce cache misses to avoid thundering herd.
+	val, err, _ := p.cache.sf.Do(key, func() (interface{}, error) {
+		// Recheck L1 while under singleflight in case another request populated it.
+		if l1Val, found := p.cache.local.Get(key); found {
+			if l1Policies, ok := l1Val.([]authz.PolicyText); ok {
+				setCacheSource(ctx, "L1")
+				return l1Policies, nil
+			}
+		}
+
+		// Recheck L2 as well.
+		var l2Policies []authz.PolicyText
+		if b, redisErr := p.cache.rdb.Get(ctx, key).Bytes(); redisErr == nil {
+			if jsonErr := json.Unmarshal(b, &l2Policies); jsonErr == nil {
+				p.cache.local.Set(key, l2Policies, p.cache.localTTL)
+				setCacheSource(ctx, "L2")
+				return l2Policies, nil
+			}
+		} else if redisErr != redis.Nil {
+			log.Printf("Redis get error: %v", redisErr)
+		}
+
+		policies, dbErr := p.base.ActivePolicies(ctx, applicationID)
+		if dbErr != nil {
+			return nil, dbErr
+		}
+		setCacheSource(ctx, "DB")
+
+		// Write-through cache update; keep synchronous to avoid unbounded goroutines.
+		if b, marshalErr := json.Marshal(policies); marshalErr == nil {
+			if setErr := p.cache.rdb.Set(ctx, key, b, p.cache.ttl).Err(); setErr != nil {
+				log.Printf("Redis set error: %v", setErr)
+			}
+		}
+		p.cache.local.Set(key, policies, p.cache.localTTL)
+		return policies, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	setCacheSource(ctx, "DB")
-
-	// 4. Update L2 (Redis) - async to not block
-	if b, err := json.Marshal(policies); err == nil {
-		go func() {
-			_ = p.cache.rdb.Set(context.Background(), key, b, p.cache.ttl).Err()
-		}()
+	policies, ok := val.([]authz.PolicyText)
+	if !ok {
+		return nil, fmt.Errorf("unexpected policy cache value type %T", val)
 	}
-
-	// 5. Update L1 (Local)
-	p.cache.local.Set(key, policies, p.cache.localTTL)
-
 	return policies, nil
 }
 
@@ -201,33 +230,67 @@ func (p *CachedPolicyProvider) ActivePolicySet(ctx context.Context, applicationI
 		log.Printf("Redis get error: %v", err)
 	}
 
-	// 3. Fetch from DB (via base)
-	policies, err := p.base.ActivePolicies(ctx, applicationID)
+	// 3. Coalesce cache misses/parsing work.
+	val, err, _ := p.cache.sf.Do(setKey, func() (interface{}, error) {
+		// Recheck L1 set cache.
+		if l1Val, found := p.cache.local.Get(setKey); found {
+			if l1PS, ok := l1Val.(*cedar.PolicySet); ok {
+				setCacheSource(ctx, "L1")
+				return l1PS, nil
+			}
+		}
+
+		// Recheck L2 text cache.
+		var l2Policies []authz.PolicyText
+		if b, redisErr := p.cache.rdb.Get(ctx, textKey).Bytes(); redisErr == nil {
+			if jsonErr := json.Unmarshal(b, &l2Policies); jsonErr == nil {
+				l2PS := cedar.NewPolicySet()
+				for _, pText := range l2Policies {
+					var policy cedar.Policy
+					if parseErr := policy.UnmarshalCedar([]byte(pText.Text)); parseErr != nil {
+						return nil, fmt.Errorf("parse policy %s: %w", pText.ID, parseErr)
+					}
+					l2PS.Add(cedar.PolicyID(pText.ID), &policy)
+				}
+				p.cache.local.Set(setKey, l2PS, p.cache.localTTL)
+				setCacheSource(ctx, "L2")
+				return l2PS, nil
+			}
+		} else if redisErr != redis.Nil {
+			log.Printf("Redis get error: %v", redisErr)
+		}
+
+		policies, dbErr := p.base.ActivePolicies(ctx, applicationID)
+		if dbErr != nil {
+			return nil, dbErr
+		}
+		setCacheSource(ctx, "DB")
+
+		ps := cedar.NewPolicySet()
+		for _, pText := range policies {
+			var policy cedar.Policy
+			if parseErr := policy.UnmarshalCedar([]byte(pText.Text)); parseErr != nil {
+				return nil, fmt.Errorf("parse policy %s: %w", pText.ID, parseErr)
+			}
+			ps.Add(cedar.PolicyID(pText.ID), &policy)
+		}
+
+		// Write-through update; no per-request goroutine.
+		if b, marshalErr := json.Marshal(policies); marshalErr == nil {
+			if setErr := p.cache.rdb.Set(ctx, textKey, b, p.cache.ttl).Err(); setErr != nil {
+				log.Printf("Redis set error: %v", setErr)
+			}
+		}
+		p.cache.local.Set(setKey, ps, p.cache.localTTL)
+		return ps, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	setCacheSource(ctx, "DB")
-
-	// Parse to PolicySet
-	ps := cedar.NewPolicySet()
-	for _, pText := range policies {
-		var policy cedar.Policy
-		if err := policy.UnmarshalCedar([]byte(pText.Text)); err != nil {
-			return nil, fmt.Errorf("parse policy %s: %w", pText.ID, err)
-		}
-		ps.Add(cedar.PolicyID(pText.ID), &policy)
+	ps, ok := val.(*cedar.PolicySet)
+	if !ok {
+		return nil, fmt.Errorf("unexpected policy set cache value type %T", val)
 	}
-
-	// 4. Update L2 (Redis) - async
-	if b, err := json.Marshal(policies); err == nil {
-		go func() {
-			_ = p.cache.rdb.Set(context.Background(), textKey, b, p.cache.ttl).Err()
-		}()
-	}
-
-	// 5. Update L1 (Local)
-	p.cache.local.Set(setKey, ps, p.cache.localTTL)
-
 	return ps, nil
 }
 
@@ -269,28 +332,53 @@ func (e *CachedEntityProvider) Entities(ctx context.Context, applicationID int64
 		log.Printf("Redis get error: %v", err)
 	}
 
-	// 3. Fetch from DB
-	entities, err := e.base.Entities(ctx, applicationID)
+	// 3. Coalesce misses and expensive DB loads.
+	val, err, _ := e.cache.sf.Do(key, func() (interface{}, error) {
+		// Recheck L1 inside singleflight.
+		if l1Val, found := e.cache.local.Get(key); found {
+			if l1Entities, ok := l1Val.(cedar.EntityMap); ok {
+				return l1Entities, nil
+			}
+		}
+
+		// Recheck L2 as another request may have already filled it.
+		var l2Entities cedar.EntityMap
+		if b, redisErr := e.cache.rdb.Get(ctx, key).Bytes(); redisErr == nil {
+			if jsonErr := json.Unmarshal(b, &l2Entities); jsonErr == nil {
+				e.cache.local.Set(key, l2Entities, e.cache.localTTL)
+				return l2Entities, nil
+			}
+		} else if redisErr != redis.Nil {
+			log.Printf("Redis get error: %v", redisErr)
+		}
+
+		entities, dbErr := e.base.Entities(ctx, applicationID)
+		if dbErr != nil {
+			return nil, dbErr
+		}
+
+		// Write-through cache update; keep synchronous for bounded resource usage.
+		if b, marshalErr := json.Marshal(entities); marshalErr == nil {
+			if setErr := e.cache.rdb.Set(ctx, key, b, e.cache.ttl).Err(); setErr != nil {
+				log.Printf("Redis set error: %v", setErr)
+			}
+		}
+		e.cache.local.Set(key, entities, e.cache.localTTL)
+		return entities, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	// 4. Update L2 (Redis) - async
-	if b, err := json.Marshal(entities); err == nil {
-		go func() {
-			_ = e.cache.rdb.Set(context.Background(), key, b, e.cache.ttl).Err()
-		}()
+	entities, ok := val.(cedar.EntityMap)
+	if !ok {
+		return nil, fmt.Errorf("unexpected entities cache value type %T", val)
 	}
-
-	// 5. Update L1 (Local)
-	e.cache.local.Set(key, entities, e.cache.localTTL)
-
 	return entities, nil
 }
 
-func (e *CachedEntityProvider) SearchEntities(ctx context.Context, applicationID int64, entityType string) ([]string, error) {
+func (e *CachedEntityProvider) SearchEntities(ctx context.Context, applicationID int64, entityType string, limit int) ([]string, error) {
 	// For now, pass through to base provider (DB) without caching specific searches
-	return e.base.SearchEntities(ctx, applicationID, entityType)
+	return e.base.SearchEntities(ctx, applicationID, entityType, limit)
 }
 
 func setCacheSource(ctx context.Context, source string) {

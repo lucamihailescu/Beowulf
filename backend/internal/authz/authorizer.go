@@ -31,6 +31,9 @@ type LookupInput struct {
 	Action        Reference
 	ResourceType  string
 	Context       map[string]any
+	// CandidateLimit caps how many candidate resources may be evaluated.
+	// If <= 0, a default limit is used.
+	CandidateLimit int
 }
 
 // EvaluationResult is a transport-friendly result for handlers.
@@ -50,7 +53,7 @@ type PolicyProvider interface {
 type EntityProvider interface {
 	Entities(ctx context.Context, applicationID int64) (cedar.EntityMap, error)
 	// SearchEntities returns IDs of entities of a specific type.
-	SearchEntities(ctx context.Context, applicationID int64, entityType string) ([]string, error)
+	SearchEntities(ctx context.Context, applicationID int64, entityType string, limit int) ([]string, error)
 }
 
 // PolicyText is a simple carrier for policy content.
@@ -64,6 +67,8 @@ type Service struct {
 	policies PolicyProvider
 	entities EntityProvider
 }
+
+const defaultLookupCandidateLimit = 10000
 
 // NewService wires an authz service with its data providers.
 func NewService(policies PolicyProvider, entities EntityProvider) *Service {
@@ -105,6 +110,15 @@ func (s *Service) Evaluate(ctx context.Context, in EvaluateInput) (EvaluationRes
 
 // LookupResources returns a list of resource IDs of the given type that the principal can perform the action on.
 func (s *Service) LookupResources(ctx context.Context, in LookupInput) ([]string, error) {
+	if in.ResourceType == "" {
+		return nil, fmt.Errorf("resource_type is required")
+	}
+
+	candidateLimit := in.CandidateLimit
+	if candidateLimit <= 0 {
+		candidateLimit = defaultLookupCandidateLimit
+	}
+
 	// 1. Load Policies
 	ps, err := s.policies.ActivePolicySet(ctx, in.ApplicationID)
 	if err != nil {
@@ -118,7 +132,7 @@ func (s *Service) LookupResources(ctx context.Context, in LookupInput) ([]string
 	}
 
 	// 3. Find candidate resources
-	candidates, err := s.entities.SearchEntities(ctx, in.ApplicationID, in.ResourceType)
+	candidates, err := s.entities.SearchEntities(ctx, in.ApplicationID, in.ResourceType, candidateLimit)
 	if err != nil {
 		return nil, fmt.Errorf("search entities: %w", err)
 	}

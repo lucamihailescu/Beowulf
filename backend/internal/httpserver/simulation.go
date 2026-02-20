@@ -23,12 +23,12 @@ type simulateRequest struct {
 
 // simulateResponse is the response for a simulation.
 type simulateResponse struct {
-	SimulationID     int64                           `json:"simulation_id"`
-	RequestsAnalyzed int                             `json:"requests_analyzed"`
-	CurrentPolicy    simulationDecisionSummary       `json:"current_policy"`
-	NewPolicy        simulationDecisionSummary       `json:"new_policy"`
-	Impact           simulationImpactSummary         `json:"impact"`
-	Status           string                          `json:"status"`
+	SimulationID     int64                     `json:"simulation_id"`
+	RequestsAnalyzed int                       `json:"requests_analyzed"`
+	CurrentPolicy    simulationDecisionSummary `json:"current_policy"`
+	NewPolicy        simulationDecisionSummary `json:"new_policy"`
+	Impact           simulationImpactSummary   `json:"impact"`
+	Status           string                    `json:"status"`
 }
 
 type simulationDecisionSummary struct {
@@ -37,10 +37,10 @@ type simulationDecisionSummary struct {
 }
 
 type simulationImpactSummary struct {
-	NewlyDenied        int                          `json:"newly_denied"`
-	NewlyAllowed       int                          `json:"newly_allowed"`
-	AffectedPrincipals []storage.AffectedPrincipal  `json:"affected_principals"`
-	SampleRequests     []storage.SimulatedRequest   `json:"sample_requests"`
+	NewlyDenied        int                         `json:"newly_denied"`
+	NewlyAllowed       int                         `json:"newly_allowed"`
+	AffectedPrincipals []storage.AffectedPrincipal `json:"affected_principals"`
+	SampleRequests     []storage.SimulatedRequest  `json:"sample_requests"`
 }
 
 // simulationListResponse is the response for listing simulations.
@@ -102,6 +102,21 @@ func (a *SimulationAPI) HandleSimulate(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"error": "new_policy_text is required"})
 		return
 	}
+	if req.SampleSize < 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "sample_size must be >= 0"})
+		return
+	}
+	if req.SampleSize > simulation.MaxSampleSize {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("sample_size must be <= %d", simulation.MaxSampleSize)})
+		return
+	}
+	if len(req.CustomScenarios) > simulation.MaxCustomScenarios {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("custom_scenarios must contain at most %d entries", simulation.MaxCustomScenarios)})
+		return
+	}
 
 	// Default mode to sample_data
 	mode := storage.SimulationModeSampleData
@@ -109,6 +124,11 @@ func (a *SimulationAPI) HandleSimulate(w http.ResponseWriter, r *http.Request) {
 	case "production_replay":
 		mode = storage.SimulationModeProductionReplay
 	case "custom":
+		if len(req.CustomScenarios) == 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "custom_scenarios is required for mode=custom"})
+			return
+		}
 		mode = storage.SimulationModeCustom
 	}
 
@@ -247,4 +267,3 @@ func RegisterSimulationRoutes(r chi.Router, api *SimulationAPI) {
 	r.Get("/v1/apps/{id}/policies/{policyId}/simulations", api.HandleListSimulations)
 	r.Get("/v1/apps/{id}/policies/{policyId}/simulations/{simId}", api.HandleGetSimulation)
 }
-

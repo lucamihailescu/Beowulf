@@ -99,6 +99,46 @@ func (r *SettingsRepo) GetValue(ctx context.Context, key string) string {
 	return s.Value
 }
 
+// GetValues retrieves multiple setting values in a single round-trip.
+// Missing keys are omitted from the returned map.
+func (r *SettingsRepo) GetValues(ctx context.Context, keys []string) (map[string]string, error) {
+	values := make(map[string]string, len(keys))
+	if len(keys) == 0 {
+		return values, nil
+	}
+
+	query := `
+		SELECT key, value, encrypted
+		FROM settings
+		WHERE key = ANY($1)
+	`
+	rows, err := r.db.Reader().Query(ctx, query, keys)
+	if err != nil {
+		return nil, fmt.Errorf("get settings batch: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var key, value string
+		var encrypted bool
+		if err := rows.Scan(&key, &value, &encrypted); err != nil {
+			return nil, fmt.Errorf("scan settings batch: %w", err)
+		}
+		if encrypted {
+			plaintext, err := r.decrypt(value)
+			if err != nil {
+				return nil, fmt.Errorf("decrypt setting %s: %w", key, err)
+			}
+			value = plaintext
+		}
+		values[key] = value
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate settings batch: %w", err)
+	}
+	return values, nil
+}
+
 // Set creates or updates a setting.
 func (r *SettingsRepo) Set(ctx context.Context, key, value, description, updatedBy string, encrypt bool) error {
 	storedValue := value
@@ -244,11 +284,22 @@ type EntraConfig struct {
 
 // GetEntraConfig retrieves the Entra configuration.
 func (r *SettingsRepo) GetEntraConfig(ctx context.Context) (*EntraConfig, error) {
-	tenantID := r.GetValue(ctx, SettingEntraTenantID)
-	clientID := r.GetValue(ctx, SettingEntraClientID)
-	clientSecret := r.GetValue(ctx, SettingEntraClientSecret)
-	redirectURI := r.GetValue(ctx, SettingEntraRedirectURI)
-	authEnabled := r.GetValue(ctx, SettingEntraAuthEnabled) == "true"
+	values, err := r.GetValues(ctx, []string{
+		SettingEntraTenantID,
+		SettingEntraClientID,
+		SettingEntraClientSecret,
+		SettingEntraRedirectURI,
+		SettingEntraAuthEnabled,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	tenantID := values[SettingEntraTenantID]
+	clientID := values[SettingEntraClientID]
+	clientSecret := values[SettingEntraClientSecret]
+	redirectURI := values[SettingEntraRedirectURI]
+	authEnabled := values[SettingEntraAuthEnabled] == "true"
 
 	return &EntraConfig{
 		TenantID:     tenantID,
@@ -360,22 +411,44 @@ type ADConfigPublic struct {
 
 // GetADConfig retrieves the Active Directory configuration.
 func (r *SettingsRepo) GetADConfig(ctx context.Context) (*ADConfig, error) {
-	enabled := r.GetValue(ctx, SettingADEnabled) == "true"
-	server := r.GetValue(ctx, SettingADServer)
-	baseDN := r.GetValue(ctx, SettingADBaseDN)
-	bindDN := r.GetValue(ctx, SettingADBindDN)
-	bindPassword := r.GetValue(ctx, SettingADBindPassword)
-	userFilter := r.GetValue(ctx, SettingADUserFilter)
-	groupFilter := r.GetValue(ctx, SettingADGroupFilter)
-	userSearchFilter := r.GetValue(ctx, SettingADUserSearchFilter)
-	groupMembershipAttr := r.GetValue(ctx, SettingADGroupMembershipAttr)
-	useTLS := r.GetValue(ctx, SettingADUseTLS) == "true"
-	insecureSkipVerify := r.GetValue(ctx, SettingADInsecureSkipVerify) == "true"
-	kerberosEnabled := r.GetValue(ctx, SettingADKerberosEnabled) == "true"
-	kerberosKeytab := r.GetValue(ctx, SettingADKerberosKeytab)
-	kerberosService := r.GetValue(ctx, SettingADKerberosService)
-	kerberosRealm := r.GetValue(ctx, SettingADKerberosRealm)
-	groupCacheTTL := r.GetValue(ctx, SettingADGroupCacheTTL)
+	values, err := r.GetValues(ctx, []string{
+		SettingADEnabled,
+		SettingADServer,
+		SettingADBaseDN,
+		SettingADBindDN,
+		SettingADBindPassword,
+		SettingADUserFilter,
+		SettingADGroupFilter,
+		SettingADUserSearchFilter,
+		SettingADGroupMembershipAttr,
+		SettingADUseTLS,
+		SettingADInsecureSkipVerify,
+		SettingADKerberosEnabled,
+		SettingADKerberosKeytab,
+		SettingADKerberosService,
+		SettingADKerberosRealm,
+		SettingADGroupCacheTTL,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	enabled := values[SettingADEnabled] == "true"
+	server := values[SettingADServer]
+	baseDN := values[SettingADBaseDN]
+	bindDN := values[SettingADBindDN]
+	bindPassword := values[SettingADBindPassword]
+	userFilter := values[SettingADUserFilter]
+	groupFilter := values[SettingADGroupFilter]
+	userSearchFilter := values[SettingADUserSearchFilter]
+	groupMembershipAttr := values[SettingADGroupMembershipAttr]
+	useTLS := values[SettingADUseTLS] == "true"
+	insecureSkipVerify := values[SettingADInsecureSkipVerify] == "true"
+	kerberosEnabled := values[SettingADKerberosEnabled] == "true"
+	kerberosKeytab := values[SettingADKerberosKeytab]
+	kerberosService := values[SettingADKerberosService]
+	kerberosRealm := values[SettingADKerberosRealm]
+	groupCacheTTL := values[SettingADGroupCacheTTL]
 
 	// Apply defaults
 	if userFilter == "" {

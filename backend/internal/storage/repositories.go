@@ -669,13 +669,23 @@ func (r *EntityRepo) UpsertEntity(ctx context.Context, applicationID int64, enti
 	return nil
 }
 
+const defaultSearchEntitiesLimit = 10000
+
 // SearchEntities returns IDs of entities of a specific type.
-func (r *EntityRepo) SearchEntities(ctx context.Context, applicationID int64, entityType string) ([]string, error) {
+// If more than limit entities exist, it returns an explicit error.
+func (r *EntityRepo) SearchEntities(ctx context.Context, applicationID int64, entityType string, limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = defaultSearchEntitiesLimit
+	}
+
+	queryLimit := limit + 1
 	rows, err := r.db.Reader().Query(ctx, `
 		SELECT entity_id
 		FROM entities
 		WHERE application_id = $1 AND entity_type = $2
-	`, applicationID, entityType)
+		ORDER BY entity_id
+		LIMIT $3
+	`, applicationID, entityType, queryLimit)
 	if err != nil {
 		return nil, fmt.Errorf("search entities: %w", err)
 	}
@@ -691,6 +701,9 @@ func (r *EntityRepo) SearchEntities(ctx context.Context, applicationID int64, en
 	}
 	if rows.Err() != nil {
 		return nil, fmt.Errorf("iterate entity ids: %w", rows.Err())
+	}
+	if len(ids) > limit {
+		return nil, fmt.Errorf("resource candidate count exceeds limit %d; narrow query scope", limit)
 	}
 	return ids, nil
 }

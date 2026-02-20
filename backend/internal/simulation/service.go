@@ -8,16 +8,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cedar-policy/cedar-go"
 	"cedar/internal/storage"
+	"github.com/cedar-policy/cedar-go"
 )
 
 // Service provides policy simulation capabilities
 type Service struct {
-	simRepo     *storage.SimulationRepo
-	policyRepo  *storage.PolicyRepo
-	entityRepo  *storage.EntityRepo
-	auditRepo   AuditLogReader
+	simRepo    *storage.SimulationRepo
+	policyRepo *storage.PolicyRepo
+	entityRepo *storage.EntityRepo
+	auditRepo  AuditLogReader
 }
 
 // AuditLogReader is an interface for reading audit logs for production replay
@@ -49,12 +49,12 @@ type SimulateRequest struct {
 
 // SimulateResponse contains simulation results
 type SimulateResponse struct {
-	SimulationID     int64                       `json:"simulation_id"`
-	RequestsAnalyzed int                         `json:"requests_analyzed"`
-	CurrentPolicy    DecisionSummary             `json:"current_policy"`
-	NewPolicy        DecisionSummary             `json:"new_policy"`
-	Impact           ImpactSummary               `json:"impact"`
-	Status           storage.SimulationStatus    `json:"status"`
+	SimulationID     int64                    `json:"simulation_id"`
+	RequestsAnalyzed int                      `json:"requests_analyzed"`
+	CurrentPolicy    DecisionSummary          `json:"current_policy"`
+	NewPolicy        DecisionSummary          `json:"new_policy"`
+	Impact           ImpactSummary            `json:"impact"`
+	Status           storage.SimulationStatus `json:"status"`
 }
 
 // DecisionSummary contains allow/deny counts
@@ -83,6 +83,19 @@ func NewService(simRepo *storage.SimulationRepo, policyRepo *storage.PolicyRepo,
 
 // RunSimulation executes a policy simulation
 func (s *Service) RunSimulation(ctx context.Context, req SimulateRequest) (*SimulateResponse, error) {
+	if req.SampleSize < 0 {
+		return nil, fmt.Errorf("sample_size must be >= 0")
+	}
+	if req.SampleSize > MaxSampleSize {
+		return nil, fmt.Errorf("sample_size must be <= %d", MaxSampleSize)
+	}
+	if len(req.CustomScenarios) > MaxCustomScenarios {
+		return nil, fmt.Errorf("custom_scenarios must contain at most %d entries", MaxCustomScenarios)
+	}
+	if req.Mode == storage.SimulationModeCustom && len(req.CustomScenarios) == 0 {
+		return nil, fmt.Errorf("custom_scenarios is required for custom mode")
+	}
+
 	// Determine current policy text - use provided text or load from DB
 	var currentPolicyText string
 	var policyVersion int
@@ -206,8 +219,16 @@ func (s *Service) generateProductionReplayRequests(ctx context.Context, req Simu
 		duration = 24 * time.Hour // Default to 24h
 	}
 
+	limit := req.SampleSize
+	if limit <= 0 {
+		limit = DefaultSampleSize
+	}
+	if limit > MaxSampleSize {
+		limit = MaxSampleSize
+	}
+
 	if s.auditRepo != nil {
-		return s.auditRepo.GetRecentRequests(ctx, req.ApplicationID, duration, 10000)
+		return s.auditRepo.GetRecentRequests(ctx, req.ApplicationID, duration, limit)
 	}
 
 	// If no audit repo, fall back to sample data
@@ -219,7 +240,10 @@ func (s *Service) generateProductionReplayRequests(ctx context.Context, req Simu
 func (s *Service) generateSampleDataRequests(ctx context.Context, req SimulateRequest) ([]AuthRequest, error) {
 	sampleSize := req.SampleSize
 	if sampleSize <= 0 {
-		sampleSize = 100
+		sampleSize = DefaultSampleSize
+	}
+	if sampleSize > MaxSampleSize {
+		sampleSize = MaxSampleSize
 	}
 
 	// Get entities to generate realistic requests
@@ -287,7 +311,6 @@ func (s *Service) buildPolicySet(policyText string) (*cedar.PolicySet, error) {
 	}
 	return ps, nil
 }
-
 
 // executeSimulation runs the actual simulation comparing two policy sets
 func (s *Service) executeSimulation(ctx context.Context, requests []AuthRequest, currentPS, newPS *cedar.PolicySet, entities cedar.EntityMap) (*SimulateResponse, error) {
@@ -458,12 +481,11 @@ func parseEntityRef(ref string) (entityType, entityID string) {
 	}
 	entityType = ref[:idx]
 	entityID = ref[idx+2:]
-	
+
 	// Remove surrounding quotes if present
 	if len(entityID) >= 2 && entityID[0] == '"' && entityID[len(entityID)-1] == '"' {
 		entityID = entityID[1 : len(entityID)-1]
 	}
-	
+
 	return entityType, entityID
 }
-

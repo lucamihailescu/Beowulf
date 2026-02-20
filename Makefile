@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: backend-run backend-lint backend-migrate backend-seed backend-docs web-install web-dev web-build compose-up compose-down e2e-demo clients-grpc clients-rest clients-all clients-python clients-javascript clients-csharp
+.PHONY: backend-run backend-lint backend-migrate backend-seed backend-docs backend-perf backend-perf-gate web-install web-dev web-build compose-up compose-down e2e-demo clients-grpc clients-rest clients-all clients-python clients-javascript clients-csharp
 
 backend-run:
 	cd backend && go run ./cmd/server
@@ -16,6 +16,13 @@ backend-lint:
 
 backend-docs:
 	cd backend && go run github.com/swaggo/swag/cmd/swag@latest init -g internal/httpserver/router.go --output docs
+
+backend-perf:
+	cd backend && go test ./internal/grpc -run '^$$' -bench 'BenchmarkServer(Check|BatchCheck_100)$$' -benchmem -count=1
+	cd backend && go test ./internal/storage -run '^$$' -bench 'BenchmarkCached(PolicyProvider|EntityProvider)(Warm|Cold)$$' -benchmem -count=1
+
+backend-perf-gate:
+	cd backend && sh ./scripts/perf_gate.sh
 
 web-install:
 	cd web && npm install
