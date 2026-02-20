@@ -1,0 +1,89 @@
+[
+  { "uid": { "type": "AgentGuardrails::Team", "id": "allow-email-foo-bar" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Team", "id": "allow-calendar-targets" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Team", "id": "allow-slack-channels" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Team", "id": "allow-http-get-endpoints" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Team", "id": "allow-http-post-endpoints" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Team", "id": "allow-http-delegated-endpoints" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Team", "id": "allow-jira-read-projects" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Team", "id": "allow-jira-write-projects" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Team", "id": "allow-jira-delegated-projects" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Team", "id": "allow-wiki-read-spaces" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Team", "id": "allow-wiki-write-spaces" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Team", "id": "allow-wiki-delegated-spaces" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Team", "id": "allow-sharepoint-read" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Team", "id": "allow-sharepoint-write" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Team", "id": "allow-sharepoint-delegated" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Team", "id": "delegated-email-users" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Team", "id": "delegated-calendar-users" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Team", "id": "delegated-slack-users" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Team", "id": "delegated-http-users" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Team", "id": "delegated-jira-users" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Team", "id": "delegated-wiki-users" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Team", "id": "delegated-sharepoint-users" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Team", "id": "breakglass-operators" }, "attrs": {}, "parents": [] },
+
+  { "uid": { "type": "AgentGuardrails::Agent", "id": "agent-mailer" }, "attrs": { "team": "platform", "environment": "prod" }, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Agent", "id": "agent-calendar" }, "attrs": { "team": "ops", "environment": "prod" }, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Agent", "id": "agent-slack" }, "attrs": { "team": "ops", "environment": "prod" }, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Agent", "id": "agent-http" }, "attrs": { "team": "platform", "environment": "prod" }, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Agent", "id": "agent-jira" }, "attrs": { "team": "pm", "environment": "prod" }, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Agent", "id": "agent-wiki" }, "attrs": { "team": "pm", "environment": "prod" }, "parents": [] },
+  { "uid": { "type": "AgentGuardrails::Agent", "id": "agent-sharepoint" }, "attrs": { "team": "it", "environment": "prod" }, "parents": [] },
+
+  { "uid": { "type": "AgentGuardrails::User", "id": "alice" }, "attrs": { "email": "alice@corp.example", "department": "ops" }, "parents": [
+    { "type": "AgentGuardrails::Team", "id": "delegated-email-users" },
+    { "type": "AgentGuardrails::Team", "id": "delegated-calendar-users" },
+    { "type": "AgentGuardrails::Team", "id": "delegated-slack-users" },
+    { "type": "AgentGuardrails::Team", "id": "delegated-http-users" },
+    { "type": "AgentGuardrails::Team", "id": "delegated-jira-users" },
+    { "type": "AgentGuardrails::Team", "id": "delegated-wiki-users" },
+    { "type": "AgentGuardrails::Team", "id": "delegated-sharepoint-users" }
+  ] },
+  { "uid": { "type": "AgentGuardrails::User", "id": "oncall-admin" }, "attrs": { "email": "oncall-admin@corp.example", "department": "security" }, "parents": [
+    { "type": "AgentGuardrails::Team", "id": "breakglass-operators" }
+  ] },
+
+  { "uid": { "type": "AgentGuardrails::EmailRecipient", "id": "foo_at_bar" }, "attrs": { "address": "foo@bar.com", "tenant": "corp" }, "parents": [
+    { "type": "AgentGuardrails::Team", "id": "allow-email-foo-bar" }
+  ] },
+  { "uid": { "type": "AgentGuardrails::EmailRecipient", "id": "bar_at_foo" }, "attrs": { "address": "bar@foo.com", "tenant": "external" }, "parents": [] },
+
+  { "uid": { "type": "AgentGuardrails::CalendarTarget", "id": "ops-primary" }, "attrs": { "calendar_id": "ops-primary", "tenant": "corp" }, "parents": [
+    { "type": "AgentGuardrails::Team", "id": "allow-calendar-targets" }
+  ] },
+  { "uid": { "type": "AgentGuardrails::SlackChannel", "id": "ops-alerts" }, "attrs": { "workspace": "corp-workspace", "channel": "ops-alerts" }, "parents": [
+    { "type": "AgentGuardrails::Team", "id": "allow-slack-channels" }
+  ] },
+
+  { "uid": { "type": "AgentGuardrails::HttpEndpoint", "id": "jira-api-get" }, "attrs": { "host": "jira.corp.example", "path_prefix": "/rest/api/3", "scheme": "https" }, "parents": [
+    { "type": "AgentGuardrails::Team", "id": "allow-http-get-endpoints" },
+    { "type": "AgentGuardrails::Team", "id": "allow-http-delegated-endpoints" }
+  ] },
+  { "uid": { "type": "AgentGuardrails::HttpEndpoint", "id": "jira-api-post" }, "attrs": { "host": "jira.corp.example", "path_prefix": "/rest/api/3/issue", "scheme": "https" }, "parents": [
+    { "type": "AgentGuardrails::Team", "id": "allow-http-post-endpoints" },
+    { "type": "AgentGuardrails::Team", "id": "allow-http-delegated-endpoints" }
+  ] },
+  { "uid": { "type": "AgentGuardrails::HttpEndpoint", "id": "public-internet" }, "attrs": { "host": "example.com", "path_prefix": "/", "scheme": "https" }, "parents": [] },
+
+  { "uid": { "type": "AgentGuardrails::JiraProject", "id": "CEDAR" }, "attrs": { "project_key": "CEDAR", "tenant": "corp" }, "parents": [
+    { "type": "AgentGuardrails::Team", "id": "allow-jira-read-projects" },
+    { "type": "AgentGuardrails::Team", "id": "allow-jira-write-projects" },
+    { "type": "AgentGuardrails::Team", "id": "allow-jira-delegated-projects" }
+  ] },
+  { "uid": { "type": "AgentGuardrails::WikiSpace", "id": "ENG" }, "attrs": { "space_key": "ENG", "tenant": "corp" }, "parents": [
+    { "type": "AgentGuardrails::Team", "id": "allow-wiki-read-spaces" },
+    { "type": "AgentGuardrails::Team", "id": "allow-wiki-write-spaces" },
+    { "type": "AgentGuardrails::Team", "id": "allow-wiki-delegated-spaces" }
+  ] },
+  { "uid": { "type": "AgentGuardrails::SharePointSite", "id": "finance-site" }, "attrs": { "site_id": "finance-site", "tenant": "corp" }, "parents": [
+    { "type": "AgentGuardrails::Team", "id": "allow-sharepoint-read" },
+    { "type": "AgentGuardrails::Team", "id": "allow-sharepoint-write" },
+    { "type": "AgentGuardrails::Team", "id": "allow-sharepoint-delegated" }
+  ] },
+  { "uid": { "type": "AgentGuardrails::SharePointPath", "id": "finance-site/reports" }, "attrs": { "site_id": "finance-site", "path": "/reports" }, "parents": [
+    { "type": "AgentGuardrails::Team", "id": "allow-sharepoint-read" },
+    { "type": "AgentGuardrails::Team", "id": "allow-sharepoint-write" },
+    { "type": "AgentGuardrails::Team", "id": "allow-sharepoint-delegated" }
+  ] }
+]

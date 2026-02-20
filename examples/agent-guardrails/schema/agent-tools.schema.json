@@ -1,0 +1,364 @@
+{
+  "AgentGuardrails": {
+    "entityTypes": {
+      "Agent": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "team": { "type": "String", "required": false },
+            "environment": { "type": "String", "required": false }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "User": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "email": { "type": "String", "required": false },
+            "department": { "type": "String", "required": false }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "Team": {},
+      "Action": {},
+      "EmailRecipient": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "address": { "type": "String", "required": true },
+            "tenant": { "type": "String", "required": false }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "CalendarTarget": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "calendar_id": { "type": "String", "required": true },
+            "tenant": { "type": "String", "required": false }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "SlackChannel": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "workspace": { "type": "String", "required": true },
+            "channel": { "type": "String", "required": true }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "HttpEndpoint": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "host": { "type": "String", "required": true },
+            "path_prefix": { "type": "String", "required": true },
+            "scheme": { "type": "String", "required": true }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "JiraProject": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "project_key": { "type": "String", "required": true },
+            "tenant": { "type": "String", "required": false }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "WikiSpace": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "space_key": { "type": "String", "required": true },
+            "tenant": { "type": "String", "required": false }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "SharePointSite": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "site_id": { "type": "String", "required": true },
+            "tenant": { "type": "String", "required": false }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "SharePointPath": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "site_id": { "type": "String", "required": true },
+            "path": { "type": "String", "required": true }
+          },
+          "additionalAttributes": false
+        }
+      }
+    },
+    "actions": {
+      "email.send": {
+        "appliesTo": {
+          "principalTypes": ["Agent", "User"],
+          "resourceTypes": ["EmailRecipient"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "agent_id": { "type": "String", "required": false },
+              "delegated_user": { "type": "Boolean", "required": false },
+              "tenant": { "type": "String", "required": false },
+              "environment": { "type": "String", "required": false },
+              "request_id": { "type": "String", "required": false },
+              "request_epoch": { "type": "Long", "required": false },
+              "break_glass": { "type": "Boolean", "required": false },
+              "ticket_id": { "type": "String", "required": false },
+              "reason": { "type": "String", "required": false },
+              "approved_by": { "type": "String", "required": false },
+              "expires_at": { "type": "Long", "required": false }
+            },
+            "additionalAttributes": false
+          }
+        }
+      },
+      "calendar.create": {
+        "appliesTo": {
+          "principalTypes": ["Agent", "User"],
+          "resourceTypes": ["CalendarTarget"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "agent_id": { "type": "String", "required": false },
+              "delegated_user": { "type": "Boolean", "required": false },
+              "tenant": { "type": "String", "required": false },
+              "environment": { "type": "String", "required": false },
+              "request_id": { "type": "String", "required": false },
+              "request_epoch": { "type": "Long", "required": false },
+              "break_glass": { "type": "Boolean", "required": false },
+              "ticket_id": { "type": "String", "required": false },
+              "reason": { "type": "String", "required": false },
+              "approved_by": { "type": "String", "required": false },
+              "expires_at": { "type": "Long", "required": false }
+            },
+            "additionalAttributes": false
+          }
+        }
+      },
+      "slack.post": {
+        "appliesTo": {
+          "principalTypes": ["Agent", "User"],
+          "resourceTypes": ["SlackChannel"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "agent_id": { "type": "String", "required": false },
+              "delegated_user": { "type": "Boolean", "required": false },
+              "tenant": { "type": "String", "required": false },
+              "environment": { "type": "String", "required": false },
+              "request_id": { "type": "String", "required": false },
+              "request_epoch": { "type": "Long", "required": false },
+              "break_glass": { "type": "Boolean", "required": false },
+              "ticket_id": { "type": "String", "required": false },
+              "reason": { "type": "String", "required": false },
+              "approved_by": { "type": "String", "required": false },
+              "expires_at": { "type": "Long", "required": false }
+            },
+            "additionalAttributes": false
+          }
+        }
+      },
+      "http.request.get": {
+        "appliesTo": {
+          "principalTypes": ["Agent", "User"],
+          "resourceTypes": ["HttpEndpoint"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "agent_id": { "type": "String", "required": false },
+              "delegated_user": { "type": "Boolean", "required": false },
+              "tenant": { "type": "String", "required": false },
+              "environment": { "type": "String", "required": false },
+              "request_id": { "type": "String", "required": false },
+              "request_epoch": { "type": "Long", "required": false },
+              "break_glass": { "type": "Boolean", "required": false },
+              "ticket_id": { "type": "String", "required": false },
+              "reason": { "type": "String", "required": false },
+              "approved_by": { "type": "String", "required": false },
+              "expires_at": { "type": "Long", "required": false }
+            },
+            "additionalAttributes": false
+          }
+        }
+      },
+      "http.request.post": {
+        "appliesTo": {
+          "principalTypes": ["Agent", "User"],
+          "resourceTypes": ["HttpEndpoint"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "agent_id": { "type": "String", "required": false },
+              "delegated_user": { "type": "Boolean", "required": false },
+              "tenant": { "type": "String", "required": false },
+              "environment": { "type": "String", "required": false },
+              "request_id": { "type": "String", "required": false },
+              "request_epoch": { "type": "Long", "required": false },
+              "break_glass": { "type": "Boolean", "required": false },
+              "ticket_id": { "type": "String", "required": false },
+              "reason": { "type": "String", "required": false },
+              "approved_by": { "type": "String", "required": false },
+              "expires_at": { "type": "Long", "required": false }
+            },
+            "additionalAttributes": false
+          }
+        }
+      },
+      "jira.read": {
+        "appliesTo": {
+          "principalTypes": ["Agent", "User"],
+          "resourceTypes": ["JiraProject"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "agent_id": { "type": "String", "required": false },
+              "delegated_user": { "type": "Boolean", "required": false },
+              "tenant": { "type": "String", "required": false },
+              "environment": { "type": "String", "required": false },
+              "request_id": { "type": "String", "required": false },
+              "request_epoch": { "type": "Long", "required": false },
+              "break_glass": { "type": "Boolean", "required": false },
+              "ticket_id": { "type": "String", "required": false },
+              "reason": { "type": "String", "required": false },
+              "approved_by": { "type": "String", "required": false },
+              "expires_at": { "type": "Long", "required": false }
+            },
+            "additionalAttributes": false
+          }
+        }
+      },
+      "jira.write": {
+        "appliesTo": {
+          "principalTypes": ["Agent", "User"],
+          "resourceTypes": ["JiraProject"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "agent_id": { "type": "String", "required": false },
+              "delegated_user": { "type": "Boolean", "required": false },
+              "tenant": { "type": "String", "required": false },
+              "environment": { "type": "String", "required": false },
+              "request_id": { "type": "String", "required": false },
+              "request_epoch": { "type": "Long", "required": false },
+              "break_glass": { "type": "Boolean", "required": false },
+              "ticket_id": { "type": "String", "required": false },
+              "reason": { "type": "String", "required": false },
+              "approved_by": { "type": "String", "required": false },
+              "expires_at": { "type": "Long", "required": false }
+            },
+            "additionalAttributes": false
+          }
+        }
+      },
+      "wiki.read": {
+        "appliesTo": {
+          "principalTypes": ["Agent", "User"],
+          "resourceTypes": ["WikiSpace"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "agent_id": { "type": "String", "required": false },
+              "delegated_user": { "type": "Boolean", "required": false },
+              "tenant": { "type": "String", "required": false },
+              "environment": { "type": "String", "required": false },
+              "request_id": { "type": "String", "required": false },
+              "request_epoch": { "type": "Long", "required": false },
+              "break_glass": { "type": "Boolean", "required": false },
+              "ticket_id": { "type": "String", "required": false },
+              "reason": { "type": "String", "required": false },
+              "approved_by": { "type": "String", "required": false },
+              "expires_at": { "type": "Long", "required": false }
+            },
+            "additionalAttributes": false
+          }
+        }
+      },
+      "wiki.write": {
+        "appliesTo": {
+          "principalTypes": ["Agent", "User"],
+          "resourceTypes": ["WikiSpace"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "agent_id": { "type": "String", "required": false },
+              "delegated_user": { "type": "Boolean", "required": false },
+              "tenant": { "type": "String", "required": false },
+              "environment": { "type": "String", "required": false },
+              "request_id": { "type": "String", "required": false },
+              "request_epoch": { "type": "Long", "required": false },
+              "break_glass": { "type": "Boolean", "required": false },
+              "ticket_id": { "type": "String", "required": false },
+              "reason": { "type": "String", "required": false },
+              "approved_by": { "type": "String", "required": false },
+              "expires_at": { "type": "Long", "required": false }
+            },
+            "additionalAttributes": false
+          }
+        }
+      },
+      "sharepoint.read": {
+        "appliesTo": {
+          "principalTypes": ["Agent", "User"],
+          "resourceTypes": ["SharePointSite", "SharePointPath"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "agent_id": { "type": "String", "required": false },
+              "delegated_user": { "type": "Boolean", "required": false },
+              "tenant": { "type": "String", "required": false },
+              "environment": { "type": "String", "required": false },
+              "request_id": { "type": "String", "required": false },
+              "request_epoch": { "type": "Long", "required": false },
+              "break_glass": { "type": "Boolean", "required": false },
+              "ticket_id": { "type": "String", "required": false },
+              "reason": { "type": "String", "required": false },
+              "approved_by": { "type": "String", "required": false },
+              "expires_at": { "type": "Long", "required": false }
+            },
+            "additionalAttributes": false
+          }
+        }
+      },
+      "sharepoint.write": {
+        "appliesTo": {
+          "principalTypes": ["Agent", "User"],
+          "resourceTypes": ["SharePointSite", "SharePointPath"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "agent_id": { "type": "String", "required": false },
+              "delegated_user": { "type": "Boolean", "required": false },
+              "tenant": { "type": "String", "required": false },
+              "environment": { "type": "String", "required": false },
+              "request_id": { "type": "String", "required": false },
+              "request_epoch": { "type": "Long", "required": false },
+              "break_glass": { "type": "Boolean", "required": false },
+              "ticket_id": { "type": "String", "required": false },
+              "reason": { "type": "String", "required": false },
+              "approved_by": { "type": "String", "required": false },
+              "expires_at": { "type": "Long", "required": false }
+            },
+            "additionalAttributes": false
+          }
+        }
+      }
+    }
+  }
+}

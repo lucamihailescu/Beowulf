@@ -40,6 +40,7 @@ A full-stack implementation for managing [Cedar](https://github.com/cedar-policy
 - **Kerberos Authentication** — SPNEGO/Negotiate authentication for enterprise environments
 - **API Key Access** — Read-only API key for exception-based external access
 - **Audit Trail** — Tracks both the authenticated caller and the subject of authorization checks
+- **Agent Guardrails Pack** — Concrete Cedar schema + least-privilege policies for agent tool enforcement
 
 ## Architecture
 
@@ -485,6 +486,72 @@ This allows you to track which services are checking permissions for which users
 ### Rate Limiting
 
 Rate limiting is applied per authenticated caller to prevent runaway services from overloading Cedar. Configure limits using `RATE_LIMIT_REQUESTS` and `RATE_LIMIT_WINDOW`.
+
+## Agent Guardrails (New)
+
+This repository now includes a concrete Cedar guardrails example for AI agent tool enforcement under `examples/agent-guardrails/`.
+
+### Included Artifacts
+
+- `examples/agent-guardrails/schema/agent-tools.schema.json`
+- `examples/agent-guardrails/policies/10_email_send_allowlist.cedar`
+- `examples/agent-guardrails/policies/20_calendar_create_allowlist.cedar`
+- `examples/agent-guardrails/policies/30_slack_post_allowlist.cedar`
+- `examples/agent-guardrails/policies/40_http_request_allowlist.cedar`
+- `examples/agent-guardrails/policies/50_jira_tool_allowlist.cedar`
+- `examples/agent-guardrails/policies/60_wiki_tool_allowlist.cedar`
+- `examples/agent-guardrails/policies/70_sharepoint_tool_allowlist.cedar`
+- `examples/agent-guardrails/policies/80_delegated_user_constraints.cedar`
+- `examples/agent-guardrails/policies/90_breakglass.cedar`
+- `examples/agent-guardrails/entities/agent-guardrails.entities.json`
+- `docs/agent-guardrails.md`
+- `tests/python/test_agent_guardrails.py`
+
+### Scope and Enforcement Model
+
+The guardrails pack is deny-by-default and supports two identity flows:
+
+1. **Service-agent flow**: `principal = AgentGuardrails::Agent::<id>`
+2. **Delegated-user flow**: `principal = AgentGuardrails::User::<id>` with required context (`agent_id`, `delegated_user=true`)
+
+It includes narrow allowlists for:
+
+- `email.send`
+- `calendar.create`
+- `slack.post`
+- `http.request.get`, `http.request.post`
+- `jira.read`, `jira.write`
+- `wiki.read`, `wiki.write`
+- `sharepoint.read`, `sharepoint.write`
+
+It also includes a constrained break-glass path with required fields (`ticket_id`, `reason`, `approved_by`, `request_epoch`, `expires_at`) and a short max TTL window.
+
+### Runtime Mapping (Agent Call -> Cedar Request)
+
+Map each tool call to:
+
+- `principal` (Agent or User)
+- `action` (typed action entity)
+- `resource` (typed target entity)
+- `context` (agent/delegation metadata, request id, optional break-glass data)
+
+For concrete payloads and deny/allow examples, see `docs/agent-guardrails.md`.
+
+### Running the Integration Test
+
+The integration test script installs the schema, policies, and entities into an existing app, then executes allow/deny checks across tool domains, delegated flow, and break-glass behavior.
+
+```bash
+python3 tests/python/test_agent_guardrails.py
+```
+
+Requirements:
+
+- Backend API available at `http://localhost:8080` (or set `CEDAR_BASE_URL`)
+- At least one application exists (seeded or manually created)
+- For authenticated deployments, provide auth headers via env:
+  - `CEDAR_BEARER_TOKEN=<access-token>` (recommended)
+  - `CEDAR_API_KEY=<api-key>` (read-only key, insufficient for bootstrap writes)
 
 ## License
 
