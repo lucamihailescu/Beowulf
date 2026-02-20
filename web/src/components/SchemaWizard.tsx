@@ -64,6 +64,7 @@ const COMMON_ACTIONS = [
 
 export default function SchemaWizard({ open, onClose, onSubmit, saving }: SchemaWizardProps) {
   const [step, setStep] = useState(0);
+  const [namespaceName, setNamespaceName] = useState("");
   const [entityTypes, setEntityTypes] = useState<EntityType[]>([]);
   const [actions, setActions] = useState<ActionDef[]>([]);
   const [activate, setActivate] = useState(true);
@@ -77,6 +78,7 @@ export default function SchemaWizard({ open, onClose, onSubmit, saving }: Schema
   // Reset wizard state
   function resetWizard() {
     setStep(0);
+    setNamespaceName("");
     setEntityTypes([]);
     setActions([]);
     setActivate(true);
@@ -168,7 +170,7 @@ export default function SchemaWizard({ open, onClose, onSubmit, saving }: Schema
     }
 
     const schema = {
-      "": {
+      [namespaceName]: {
         entityTypes: entityTypesObj,
         actions: actionsObj,
       },
@@ -229,6 +231,17 @@ export default function SchemaWizard({ open, onClose, onSubmit, saving }: Schema
             message="Define Entity Types"
             description="Entity types represent the nouns in your authorization model — users, groups, resources, and other objects that policies reference."
           />
+
+          <Card size="small" title="Namespace">
+            <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
+              Use empty namespace for legacy/global schemas, or set a namespace (for example, <Typography.Text code>AgentGuardrails</Typography.Text>) for fully qualified Cedar types.
+            </Typography.Paragraph>
+            <Input
+              placeholder='Namespace (leave empty for "")'
+              value={namespaceName}
+              onChange={(e) => setNamespaceName(e.target.value)}
+            />
+          </Card>
 
           <Card size="small" title="Quick Add Common Types">
             <Space wrap>

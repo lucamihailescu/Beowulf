@@ -43,6 +43,39 @@ def install_schema(app_id: int) -> None:
     resp.raise_for_status()
 
 
+def assert_schema_metadata(app_id: int) -> None:
+    resp = SESSION.get(f"{BASE_URL}/v1/apps/{app_id}/schemas/active/metadata", timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+    namespaces = {item.get("name") for item in data.get("namespaces", [])}
+    if "AgentGuardrails" not in namespaces:
+        raise AssertionError(f"active schema metadata missing AgentGuardrails namespace: {namespaces}")
+    action_ids = set(data.get("action_ids", []))
+    if "email.send" not in action_ids:
+        raise AssertionError("active schema metadata missing email.send action")
+
+
+def assert_policy_validation_warnings(app_id: int) -> None:
+    payload = {
+        "name": f"validation-check-{int(time.time())}",
+        "description": "validation warning probe",
+        "policy_text": """
+permit (
+  principal == AgentGuardrails::Agent::\"agent-mailer\",
+  action == AgentGuardrails::Action::\"unknown.action\",
+  resource == AgentGuardrails::EmailRecipient::\"foo_at_bar\"
+);
+""".strip(),
+        "activate": False,
+    }
+    resp = SESSION.post(f"{BASE_URL}/v1/apps/{app_id}/policies", json=payload, timeout=15)
+    resp.raise_for_status()
+    body = resp.json()
+    warnings = body.get("validation", {}).get("warnings", [])
+    if not any("unknown.action" in warning for warning in warnings):
+        raise AssertionError(f"expected unknown action validation warning, got: {warnings}")
+
+
 def install_policies(app_id: int) -> None:
     ts = int(time.time())
     for idx, path in enumerate(sorted(POLICY_DIR.glob("*.cedar"))):
@@ -250,6 +283,8 @@ def main() -> None:
         raise
     print(f"Using app_id={app_id}")
     install_schema(app_id)
+    assert_schema_metadata(app_id)
+    assert_policy_validation_warnings(app_id)
     install_policies(app_id)
     install_entities(app_id)
     run_cases(app_id)

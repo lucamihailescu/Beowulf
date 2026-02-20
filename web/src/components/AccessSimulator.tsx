@@ -21,7 +21,8 @@ import {
   InfoCircleOutlined,
   ReloadOutlined,
 } from "@ant-design/icons";
-import { api, type Application, type AuthorizeResponse, type CedarEntity } from "../api";
+import { api, type Application, type AuthorizeResponse, type CedarEntity, type Schema, type SchemaMetadata } from "../api";
+import { normalizeSchemaMetadata, parseSchemaMetadataFromText } from "../schemaMetadata";
 
 type AccessSimulatorProps = {
   /** If provided, restricts simulator to this application */
@@ -45,6 +46,8 @@ type SimulationResult = {
 export default function AccessSimulator({ applicationId, compact = false }: AccessSimulatorProps) {
   const [apps, setApps] = useState<Application[]>([]);
   const [entities, setEntities] = useState<CedarEntity[]>([]);
+  const [activeSchema, setActiveSchema] = useState<Schema | null>(null);
+  const [activeSchemaMetadata, setActiveSchemaMetadata] = useState<SchemaMetadata | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingEntities, setLoadingEntities] = useState(false);
   const [error, setError] = useState("");
@@ -53,6 +56,7 @@ export default function AccessSimulator({ applicationId, compact = false }: Acce
   const [selectedAppId, setSelectedAppId] = useState<number | undefined>(applicationId);
   const [principalType, setPrincipalType] = useState("User");
   const [principalId, setPrincipalId] = useState("");
+  const [actionType, setActionType] = useState("Action");
   const [actionName, setActionName] = useState("view");
   const [resourceType, setResourceType] = useState("Document");
   const [resourceId, setResourceId] = useState("");
@@ -101,8 +105,56 @@ export default function AccessSimulator({ applicationId, compact = false }: Acce
     loadEntities();
   }, [selectedAppId]);
 
+  useEffect(() => {
+    let cancelled = false;
+    async function loadSchema() {
+      if (!selectedAppId) {
+        setActiveSchema(null);
+        setActiveSchemaMetadata(null);
+        return;
+      }
+      try {
+        const schema = await api.getActiveSchema(selectedAppId);
+        if (!cancelled) setActiveSchema(schema);
+      } catch {
+        if (!cancelled) {
+          setActiveSchema(null);
+          setActiveSchemaMetadata(null);
+        }
+      }
+    }
+    loadSchema();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedAppId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadSchemaMetadata() {
+      if (!selectedAppId || !activeSchema?.schema_text) {
+        setActiveSchemaMetadata(null);
+        return;
+      }
+      try {
+        const metadata = await api.getActiveSchemaMetadata(selectedAppId);
+        if (!cancelled) setActiveSchemaMetadata(metadata);
+      } catch {
+        const fallback = parseSchemaMetadataFromText(activeSchema.schema_text);
+        if (!cancelled) setActiveSchemaMetadata(fallback);
+      }
+    }
+    loadSchemaMetadata();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedAppId, activeSchema?.schema_text]);
+
+  const normalizedSchema = normalizeSchemaMetadata(activeSchemaMetadata);
+  const schemaActionRefs = normalizedSchema.actionRefs;
+
   // Extract unique types from entities
-  const entityTypes = [...new Set(entities.map((e) => e.uid.type))];
+  const entityTypes = [...new Set([...entities.map((e) => e.uid.type), ...normalizedSchema.entityTypes])];
   const principalTypes = entityTypes.length > 0 ? entityTypes : ["User", "Group"];
   const resourceTypes = entityTypes.length > 0 ? entityTypes : ["Document", "Folder", "Resource"];
 
@@ -110,7 +162,16 @@ export default function AccessSimulator({ applicationId, compact = false }: Acce
   const getEntitiesOfType = (type: string) => entities.filter((e) => e.uid.type === type);
 
   // Common actions
-  const commonActions = ["view", "edit", "delete", "create", "share", "admin", "read", "write"];
+  const commonActions = normalizedSchema.actionIds.length > 0
+    ? normalizedSchema.actionIds
+    : ["view", "edit", "delete", "create", "share", "admin", "read", "write"];
+
+  useEffect(() => {
+    if (schemaActionRefs.length === 0) return;
+    const first = schemaActionRefs[0];
+    setActionType(first.actionType);
+    setActionName(first.actionId);
+  }, [schemaActionRefs]);
 
   async function runSimulation() {
     if (!selectedAppId || !principalId || !resourceId) {
@@ -135,7 +196,7 @@ export default function AccessSimulator({ applicationId, compact = false }: Acce
       const response = await api.authorize({
         application_id: selectedAppId,
         principal: { type: principalType, id: principalId },
-        action: { type: "Action", id: actionName },
+        action: { type: actionType, id: actionName },
         resource: { type: resourceType, id: resourceId },
         context,
       });
@@ -147,7 +208,7 @@ export default function AccessSimulator({ applicationId, compact = false }: Acce
         timestamp: new Date(),
         request: {
           principal: `${principalType}::"${principalId}"`,
-          action: `Action::"${actionName}"`,
+          action: `${actionType}::"${actionName}"`,
           resource: `${resourceType}::"${resourceId}"`,
         },
       };
@@ -187,6 +248,8 @@ export default function AccessSimulator({ applicationId, compact = false }: Acce
           onPrincipalTypeChange={setPrincipalType}
           principalId={principalId}
           onPrincipalIdChange={setPrincipalId}
+          actionType={actionType}
+          onActionTypeChange={setActionType}
           actionName={actionName}
           onActionChange={setActionName}
           resourceType={resourceType}
@@ -196,6 +259,7 @@ export default function AccessSimulator({ applicationId, compact = false }: Acce
           principalTypes={principalTypes}
           resourceTypes={resourceTypes}
           commonActions={commonActions}
+          actionRefs={schemaActionRefs}
           getEntitiesOfType={getEntitiesOfType}
           loading={loading}
           error={error}
@@ -284,10 +348,26 @@ export default function AccessSimulator({ applicationId, compact = false }: Acce
             </Space>
             <Select
               style={{ width: "100%" }}
-              value={actionName}
-              onChange={setActionName}
+              value={`${actionType}:${actionName}`}
+              onChange={(v) => {
+                const idx = v.lastIndexOf(":");
+                if (idx < 0) {
+                  setActionType("Action");
+                  setActionName(v);
+                  return;
+                }
+                setActionType(v.slice(0, idx));
+                setActionName(v.slice(idx + 1));
+              }}
               showSearch
-              options={commonActions.map((a) => ({ value: a, label: a }))}
+              options={
+                schemaActionRefs.length > 0
+                  ? schemaActionRefs.map((a) => ({
+                      value: `${a.actionType}:${a.actionId}`,
+                      label: `${a.actionType}:${a.actionId}`,
+                    }))
+                  : commonActions.map((a) => ({ value: `Action:${a}`, label: `Action:${a}` }))
+              }
               placeholder="Select or type action..."
             />
           </div>
@@ -517,6 +597,8 @@ function CompactSimulator({
   onPrincipalTypeChange,
   principalId,
   onPrincipalIdChange,
+  actionType,
+  onActionTypeChange,
   actionName,
   onActionChange,
   resourceType,
@@ -526,6 +608,7 @@ function CompactSimulator({
   principalTypes,
   resourceTypes,
   commonActions,
+  actionRefs,
   getEntitiesOfType,
   loading,
   error,
@@ -571,9 +654,25 @@ function CompactSimulator({
       <Select
         size="small"
         style={{ width: "100%" }}
-        value={actionName}
-        onChange={onActionChange}
-        options={commonActions.map((a: string) => ({ value: a, label: a }))}
+        value={`${actionType}:${actionName}`}
+        onChange={(v: string) => {
+          const idx = v.lastIndexOf(":");
+          if (idx < 0) {
+            onActionTypeChange("Action");
+            onActionChange(v);
+            return;
+          }
+          onActionTypeChange(v.slice(0, idx));
+          onActionChange(v.slice(idx + 1));
+        }}
+        options={
+          actionRefs.length > 0
+            ? actionRefs.map((a: { actionType: string; actionId: string }) => ({
+                value: `${a.actionType}:${a.actionId}`,
+                label: `${a.actionType}:${a.actionId}`,
+              }))
+            : commonActions.map((a: string) => ({ value: `Action:${a}`, label: `Action:${a}` }))
+        }
       />
 
       <Space.Compact style={{ width: "100%" }}>

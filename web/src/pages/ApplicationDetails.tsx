@@ -2,9 +2,10 @@ import { useEffect, useState, useMemo } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { Alert, Button, Card, Checkbox, Collapse, Descriptions, Dropdown, Input, Modal, Select, Space, Table, Tag, Typography } from "antd";
 import { CheckCircleOutlined, CloseCircleOutlined, PlusOutlined, EditOutlined, DownOutlined, FileTextOutlined, ThunderboltOutlined, DeleteOutlined } from "@ant-design/icons";
-import { api, type Application, type PolicySummary, type PolicyDetails, type Schema, type AuthorizeResponse } from "../api";
+import { api, type Application, type PolicySummary, type PolicyDetails, type Schema, type AuthorizeResponse, type SchemaMetadata } from "../api";
 import SchemaWizard from "../components/SchemaWizard";
 import PolicyTemplateWizard from "../components/PolicyTemplateWizard";
+import { normalizeSchemaMetadata, parseSchemaMetadataFromText } from "../schemaMetadata";
 
 export default function ApplicationDetails() {
   const { id } = useParams<{ id: string }>();
@@ -16,6 +17,7 @@ export default function ApplicationDetails() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [policyValidationWarnings, setPolicyValidationWarnings] = useState<string[]>([]);
 
   // Policy modal state
   const [selectedPolicy, setSelectedPolicy] = useState<PolicyDetails | null>(null);
@@ -41,6 +43,7 @@ export default function ApplicationDetails() {
   // Access Simulator state
   const [simPrincipalType, setSimPrincipalType] = useState("User");
   const [simPrincipalId, setSimPrincipalId] = useState("");
+  const [simActionType, setSimActionType] = useState("Action");
   const [simAction, setSimAction] = useState("view");
   const [simResourceType, setSimResourceType] = useState("Document");
   const [simResourceId, setSimResourceId] = useState("");
@@ -50,6 +53,8 @@ export default function ApplicationDetails() {
 
   const commonActions = ["view", "edit", "delete", "create", "share", "admin", "read", "write"];
   const commonTypes = ["User", "Group", "Document", "Folder", "Resource"];
+  const [activeSchemaMetadata, setActiveSchemaMetadata] = useState<SchemaMetadata | null>(null);
+  const [schemaNamespace, setSchemaNamespace] = useState("");
 
   // Resource Types & Actions manager state
   const [newResourceType, setNewResourceType] = useState("");
@@ -59,33 +64,81 @@ export default function ApplicationDetails() {
   // Parse entity types and actions from the active schema
   const activeSchema = useMemo(() => schemas.find(s => s.active), [schemas]);
 
-  const schemaEntityTypes = useMemo(() => {
-    if (!activeSchema?.schema_text) return [];
-    try {
-      const parsed = JSON.parse(activeSchema.schema_text);
-      const namespace = parsed[""] || parsed;
-      if (namespace?.entityTypes) {
-        return Object.keys(namespace.entityTypes).sort();
-      }
-    } catch (e) {
-      // Ignore parse errors
-    }
-    return [];
-  }, [activeSchema]);
+  const normalizedSchema = useMemo(
+    () => normalizeSchemaMetadata(activeSchemaMetadata),
+    [activeSchemaMetadata]
+  );
+  const schemaEntityTypes = useMemo(() => normalizedSchema.entityTypes, [normalizedSchema.entityTypes]);
+  const schemaActions = useMemo(() => normalizedSchema.actionIds, [normalizedSchema.actionIds]);
+  const schemaActionRefs = useMemo(() => normalizedSchema.actionRefs, [normalizedSchema.actionRefs]);
+  const principalTypeOptions = schemaEntityTypes.length > 0 ? schemaEntityTypes : commonTypes;
+  const resourceTypeOptions = schemaEntityTypes.length > 0 ? schemaEntityTypes : commonTypes;
+  const schemaNamespaces = useMemo(
+    () => (normalizedSchema.namespaces.length > 0 ? normalizedSchema.namespaces : [""]),
+    [normalizedSchema.namespaces]
+  );
+  const selectedNamespaceMeta = useMemo(
+    () => activeSchemaMetadata?.namespaces?.find((n) => n.name === schemaNamespace) ?? null,
+    [activeSchemaMetadata, schemaNamespace]
+  );
+  const managedEntityTypes = useMemo(() => {
+    if (!selectedNamespaceMeta) return [];
+    return selectedNamespaceMeta.entity_types.map((t) => {
+      const prefix = schemaNamespace ? `${schemaNamespace}::` : "";
+      return prefix && t.startsWith(prefix) ? t.slice(prefix.length) : t;
+    });
+  }, [selectedNamespaceMeta, schemaNamespace]);
+  const managedActions = useMemo(
+    () => selectedNamespaceMeta?.actions ?? [],
+    [selectedNamespaceMeta]
+  );
 
-  const schemaActions = useMemo(() => {
-    if (!activeSchema?.schema_text) return [];
-    try {
-      const parsed = JSON.parse(activeSchema.schema_text);
-      const namespace = parsed[""] || parsed;
-      if (namespace?.actions) {
-        return Object.keys(namespace.actions).sort();
-      }
-    } catch (e) {
-      // Ignore parse errors
+  useEffect(() => {
+    let cancelled = false;
+    if (!appId || !activeSchema?.schema_text) {
+      setActiveSchemaMetadata(null);
+      return;
     }
-    return [];
-  }, [activeSchema]);
+    (async () => {
+      try {
+        const metadata = await api.getActiveSchemaMetadata(appId);
+        if (!cancelled) {
+          setActiveSchemaMetadata(metadata);
+        }
+      } catch {
+        const fallback = parseSchemaMetadataFromText(activeSchema.schema_text);
+        if (!cancelled) {
+          setActiveSchemaMetadata(fallback);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [appId, activeSchema?.schema_text]);
+
+  useEffect(() => {
+    if (schemaActionRefs.length === 0) return;
+    const first = schemaActionRefs[0];
+    setSimActionType(first.actionType);
+    setSimAction(first.actionId);
+  }, [schemaActionRefs]);
+
+  useEffect(() => {
+    if (principalTypeOptions.length > 0 && !principalTypeOptions.includes(simPrincipalType)) {
+      setSimPrincipalType(principalTypeOptions[0]);
+    }
+    if (resourceTypeOptions.length > 0 && !resourceTypeOptions.includes(simResourceType)) {
+      setSimResourceType(resourceTypeOptions[0]);
+    }
+  }, [principalTypeOptions, resourceTypeOptions, simPrincipalType, simResourceType]);
+
+  useEffect(() => {
+    if (schemaNamespaces.length === 0) return;
+    if (!schemaNamespaces.includes(schemaNamespace)) {
+      setSchemaNamespace(schemaNamespaces[0]);
+    }
+  }, [schemaNamespaces, schemaNamespace]);
 
   async function runSimulation() {
     if (!simPrincipalId || !simResourceId) {
@@ -99,7 +152,7 @@ export default function ApplicationDetails() {
       const response = await api.authorize({
         application_id: appId,
         principal: { type: simPrincipalType, id: simPrincipalId },
-        action: { type: "Action", id: simAction },
+        action: { type: simActionType, id: simAction },
         resource: { type: simResourceType, id: simResourceId },
       });
       setSimResult(response);
@@ -215,6 +268,7 @@ export default function ApplicationDetails() {
   async function onSaveExistingPolicy() {
     if (!selectedPolicy) return;
     setError("");
+    setPolicyValidationWarnings([]);
     setSavingExisting(true);
     try {
       const res = await api.createPolicy(appId, {
@@ -232,6 +286,7 @@ export default function ApplicationDetails() {
       } else {
         setNotice("Policy saved successfully.");
       }
+      setPolicyValidationWarnings(res.validation?.warnings ?? []);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -297,6 +352,7 @@ export default function ApplicationDetails() {
   async function onPolicyWizardSubmit(name: string, description: string, policyText: string, activate: boolean) {
     setError("");
     setNotice("");
+    setPolicyValidationWarnings([]);
     setSavingPolicy(true);
     try {
       const res = await api.createPolicy(appId, {
@@ -310,6 +366,7 @@ export default function ApplicationDetails() {
       } else {
         setNotice(`Policy "${name}" created successfully.`);
       }
+      setPolicyValidationWarnings(res.validation?.warnings ?? []);
       setPolicyWizardOpen(false);
       setPolicies(await api.listPolicies(appId));
     } catch (e) {
@@ -320,8 +377,8 @@ export default function ApplicationDetails() {
     }
   }
 
-  // Helper to build schema JSON from current types and actions
-  function buildSchemaJson(entityTypes: string[], actions: string[]): string {
+  // Helper to build schema JSON for a target namespace while preserving other namespaces.
+  function buildSchemaJson(entityTypes: string[], actions: string[], namespace: string): string {
     const entityTypesObj: Record<string, object> = {};
     for (const t of entityTypes) {
       // Default: User and Group can be members of Group
@@ -338,14 +395,29 @@ export default function ApplicationDetails() {
       actionsObj[a] = {};
     }
 
-    return JSON.stringify({ "": { entityTypes: entityTypesObj, actions: actionsObj } }, null, 2);
+    const namespaceKey = namespace || "";
+    let root: Record<string, any> = {};
+    if (activeSchema?.schema_text) {
+      try {
+        const parsed = JSON.parse(activeSchema.schema_text) as Record<string, any>;
+        if (parsed && typeof parsed === "object" && ("entityTypes" in parsed || "actions" in parsed)) {
+          root[""] = parsed;
+        } else {
+          root = parsed;
+        }
+      } catch {
+        root = {};
+      }
+    }
+    root[namespaceKey] = { entityTypes: entityTypesObj, actions: actionsObj };
+    return JSON.stringify(root, null, 2);
   }
 
   async function updateSchemaWithTypesAndActions(newEntityTypes: string[], newActions: string[]) {
     setUpdatingSchema(true);
     setError("");
     try {
-      const schemaText = buildSchemaJson(newEntityTypes, newActions);
+      const schemaText = buildSchemaJson(newEntityTypes, newActions, schemaNamespace);
       await api.createSchema(appId, { schema_text: schemaText, activate: true });
       setSchemas(await api.listSchemas(appId));
     } catch (e) {
@@ -358,38 +430,38 @@ export default function ApplicationDetails() {
   async function addResourceType() {
     const trimmed = newResourceType.trim();
     if (!trimmed) return;
-    if (schemaEntityTypes.includes(trimmed)) {
+    if (managedEntityTypes.includes(trimmed)) {
       setError(`Resource type "${trimmed}" already exists.`);
       return;
     }
-    const updatedTypes = [...schemaEntityTypes, trimmed];
-    await updateSchemaWithTypesAndActions(updatedTypes, schemaActions);
+    const updatedTypes = [...managedEntityTypes, trimmed];
+    await updateSchemaWithTypesAndActions(updatedTypes, managedActions);
     setNewResourceType("");
     setNotice(`Resource type "${trimmed}" added.`);
   }
 
   async function removeResourceType(typeName: string) {
-    const updatedTypes = schemaEntityTypes.filter(t => t !== typeName);
-    await updateSchemaWithTypesAndActions(updatedTypes, schemaActions);
+    const updatedTypes = managedEntityTypes.filter(t => t !== typeName);
+    await updateSchemaWithTypesAndActions(updatedTypes, managedActions);
     setNotice(`Resource type "${typeName}" removed.`);
   }
 
   async function addAction() {
     const trimmed = newAction.trim();
     if (!trimmed) return;
-    if (schemaActions.includes(trimmed)) {
+    if (managedActions.includes(trimmed)) {
       setError(`Action "${trimmed}" already exists.`);
       return;
     }
-    const updatedActions = [...schemaActions, trimmed];
-    await updateSchemaWithTypesAndActions(schemaEntityTypes, updatedActions);
+    const updatedActions = [...managedActions, trimmed];
+    await updateSchemaWithTypesAndActions(managedEntityTypes, updatedActions);
     setNewAction("");
     setNotice(`Action "${trimmed}" added.`);
   }
 
   async function removeAction(actionName: string) {
-    const updatedActions = schemaActions.filter(a => a !== actionName);
-    await updateSchemaWithTypesAndActions(schemaEntityTypes, updatedActions);
+    const updatedActions = managedActions.filter(a => a !== actionName);
+    await updateSchemaWithTypesAndActions(managedEntityTypes, updatedActions);
     setNotice(`Action "${actionName}" removed.`);
   }
 
@@ -401,6 +473,16 @@ export default function ApplicationDetails() {
       <Button type="link" onClick={() => navigate("/applications")}>← Back to applications</Button>
       {error && <Alert type="error" showIcon message={error} />}
       {notice && <Alert type="success" showIcon message={notice} closable onClose={() => setNotice("")} />}
+      {policyValidationWarnings.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          closable
+          onClose={() => setPolicyValidationWarnings([])}
+          message="Schema validation warnings"
+          description={policyValidationWarnings.join(" ")}
+        />
+      )}
       <Card loading={loading}>
         {app ? (
           <Descriptions title={app.name} bordered column={1} size="middle">
@@ -458,7 +540,12 @@ export default function ApplicationDetails() {
           columns={[
             { title: "Name", dataIndex: "name" },
             { title: "Description", dataIndex: "description" },
-            { title: "Active", dataIndex: "active_version", width: 80, render: (v) => v || "—" },
+            {
+              title: "Active",
+              dataIndex: "active_version",
+              width: 120,
+              render: (v) => (v ? <Tag color="green">v{v}</Tag> : <Tag color="orange">No active</Tag>),
+            },
             { title: "Latest", dataIndex: "latest_version", width: 80, render: (v) => v || "—" },
             {
               title: "Status",
@@ -608,14 +695,29 @@ export default function ApplicationDetails() {
             Define the resource types (entities) and actions for your application. These will be available in the Policy Template Wizard.
           </Typography.Paragraph>
 
+          <div>
+            <Typography.Text strong style={{ display: "block", marginBottom: 8 }}>
+              Namespace
+            </Typography.Text>
+            <Select
+              style={{ width: 320 }}
+              value={schemaNamespace}
+              onChange={setSchemaNamespace}
+              options={schemaNamespaces.map((ns) => ({
+                value: ns,
+                label: ns === "" ? '(default "")' : ns,
+              }))}
+            />
+          </div>
+
           {/* Resource Types Section */}
           <div>
             <Typography.Text strong style={{ display: "block", marginBottom: 8 }}>
               Resource Types
             </Typography.Text>
             <Space wrap style={{ marginBottom: 8 }}>
-              {schemaEntityTypes.length > 0 ? (
-                schemaEntityTypes.map((t) => (
+              {managedEntityTypes.length > 0 ? (
+                managedEntityTypes.map((t) => (
                   <Tag
                     key={t}
                     color="green"
@@ -640,8 +742,8 @@ export default function ApplicationDetails() {
                 onChange={setNewResourceType}
                 placeholder="Quick add..."
                 allowClear
-                options={commonTypes
-                  .filter((t) => !schemaEntityTypes.includes(t))
+                options={principalTypeOptions
+                  .filter((t) => !managedEntityTypes.includes(t))
                   .map((t) => ({ value: t, label: t }))}
               />
               <Input
@@ -669,8 +771,8 @@ export default function ApplicationDetails() {
               Actions
             </Typography.Text>
             <Space wrap style={{ marginBottom: 8 }}>
-              {schemaActions.length > 0 ? (
-                schemaActions.map((a) => (
+              {managedActions.length > 0 ? (
+                managedActions.map((a) => (
                   <Tag
                     key={a}
                     color="purple"
@@ -695,8 +797,8 @@ export default function ApplicationDetails() {
                 onChange={setNewAction}
                 placeholder="Quick add..."
                 allowClear
-                options={commonActions
-                  .filter((a) => !schemaActions.includes(a))
+                options={(managedActions.length > 0 ? managedActions : commonActions)
+                  .filter((a) => !managedActions.includes(a))
                   .map((a) => ({ value: a, label: a }))}
               />
               <Input
@@ -719,7 +821,7 @@ export default function ApplicationDetails() {
           </div>
 
           {/* Info about Policy Wizard integration */}
-          {(schemaEntityTypes.length > 0 || schemaActions.length > 0) && (
+          {(managedEntityTypes.length > 0 || managedActions.length > 0) && (
             <Alert
               type="info"
               showIcon
@@ -768,7 +870,7 @@ export default function ApplicationDetails() {
                       style={{ width: 120 }}
                       value={simPrincipalType}
                       onChange={setSimPrincipalType}
-                      options={commonTypes.map((t) => ({ value: t, label: t }))}
+                      options={principalTypeOptions.map((t) => ({ value: t, label: t }))}
                     />
                     <Input
                       style={{ width: "calc(100% - 120px)" }}
@@ -784,10 +886,29 @@ export default function ApplicationDetails() {
                   <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>Action (What?)</Typography.Text>
                   <Select
                     style={{ width: "100%" }}
-                    value={simAction}
-                    onChange={setSimAction}
+                    value={`${simActionType}:${simAction}`}
+                    onChange={(v) => {
+                      const idx = v.lastIndexOf(":");
+                      if (idx < 0) {
+                        setSimActionType("Action");
+                        setSimAction(v);
+                        return;
+                      }
+                      setSimActionType(v.slice(0, idx));
+                      setSimAction(v.slice(idx + 1));
+                    }}
                     showSearch
-                    options={commonActions.map((a) => ({ value: a, label: a }))}
+                    options={
+                      schemaActionRefs.length > 0
+                        ? schemaActionRefs.map((a) => ({
+                            value: `${a.actionType}:${a.actionId}`,
+                            label: `${a.actionType}:${a.actionId}`,
+                          }))
+                        : commonActions.map((a) => ({
+                            value: `Action:${a}`,
+                            label: `Action:${a}`,
+                          }))
+                    }
                   />
                 </div>
 
@@ -799,7 +920,7 @@ export default function ApplicationDetails() {
                       style={{ width: 120 }}
                       value={simResourceType}
                       onChange={setSimResourceType}
-                      options={commonTypes.map((t) => ({ value: t, label: t }))}
+                      options={resourceTypeOptions.map((t) => ({ value: t, label: t }))}
                     />
                     <Input
                       style={{ width: "calc(100% - 120px)" }}
@@ -955,7 +1076,10 @@ export default function ApplicationDetails() {
           <Space direction="vertical" size={12} style={{ width: "100%" }}>
             {selectedPolicy.id !== 0 && (
               <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
-                Active v{selectedPolicy.active_version || "—"} · Latest v{selectedPolicy.latest_version || "—"}
+                {selectedPolicy.active_version > 0
+                  ? `Active v${selectedPolicy.active_version}`
+                  : "No active version"}{" "}
+                · Latest v{selectedPolicy.latest_version || "—"}
               </Typography.Paragraph>
             )}
 
@@ -1024,6 +1148,7 @@ permit (
         approvalRequired={app?.approval_required}
         entityTypes={schemaEntityTypes.length > 0 ? schemaEntityTypes : commonTypes}
         actions={schemaActions.length > 0 ? schemaActions : commonActions}
+        actionRefs={schemaActionRefs}
       />
     </Space>
   );

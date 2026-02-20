@@ -350,6 +350,7 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 		r.Get("/", api.handleListSchemas)
 		r.Post("/", api.handleCreateSchema)
 		r.Get("/active", api.handleGetActiveSchema)
+		r.Get("/active/metadata", api.handleGetActiveSchemaMetadata)
 		r.Post("/activate", api.handleActivateSchema)
 	})
 
@@ -1126,8 +1127,7 @@ func (a *API) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if schema exists for information purposes
-	var hasActiveSchema bool
+	validation := policyValidationResult{Valid: true}
 	if a.schemas != nil {
 		activeSchema, err := a.schemas.GetActiveSchema(r.Context(), appID)
 		if err != nil {
@@ -1135,9 +1135,15 @@ func (a *API) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(map[string]string{"error": "failed to check schema: " + err.Error()})
 			return
 		}
-		hasActiveSchema = activeSchema != nil
+		if activeSchema != nil {
+			meta, metaErr := extractSchemaMetadata(activeSchema.SchemaText)
+			if metaErr != nil {
+				validation.Warnings = append(validation.Warnings, "schema metadata unavailable: "+metaErr.Error())
+			} else {
+				validation = validatePolicyAgainstSchema(req.PolicyText, meta)
+			}
+		}
 	}
-	_ = hasActiveSchema
 
 	policyID, version, status, err := a.policies.UpsertPolicyWithVersion(r.Context(), appID, req.Name, req.Description, req.PolicyText, req.Activate)
 	if err != nil {
@@ -1166,7 +1172,12 @@ func (a *API) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 		_ = a.audits.Log(r.Context(), &appID, "api", auditAction, req.Name, "", auditCtx)
 	}
 
-	json.NewEncoder(w).Encode(map[string]any{"policy_id": policyID, "version": version, "status": status})
+	json.NewEncoder(w).Encode(map[string]any{
+		"policy_id":  policyID,
+		"version":    version,
+		"status":     status,
+		"validation": validation,
+	})
 }
 
 // @Summary List Policies

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   Alert,
   Button,
@@ -50,6 +50,11 @@ type TemplateVariable = {
   required?: boolean;
 };
 
+type ActionRefOption = {
+  actionType: string;
+  actionId: string;
+};
+
 type PolicyTemplateWizardProps = {
   open: boolean;
   onClose: () => void;
@@ -58,6 +63,7 @@ type PolicyTemplateWizardProps = {
   approvalRequired?: boolean;
   entityTypes: string[];
   actions: string[];
+  actionRefs?: ActionRefOption[];
 };
 
 const POLICY_TEMPLATES: PolicyTemplate[] = [
@@ -685,6 +691,23 @@ permit (
   },
 ];
 
+function applySchemaTypeHints(
+  policyText: string,
+  userType: string,
+  groupType: string,
+  defaultActionType: string,
+  actionTypeByID: Map<string, string>
+): string {
+  let patched = policyText;
+  patched = patched.replace(/(?<!:)User::"/g, `${userType}::"`);
+  patched = patched.replace(/(?<!:)Group::"/g, `${groupType}::"`);
+  patched = patched.replace(/(?<!:)Action::"([^"]+)"/g, (_match, actionID: string) => {
+    const actionType = actionTypeByID.get(actionID) || defaultActionType;
+    return `${actionType}::"${actionID}"`;
+  });
+  return patched;
+}
+
 const CATEGORY_LABELS: Record<string, { label: string; color: string }> = {
   rbac: { label: "Role-Based", color: "blue" },
   abac: { label: "Attribute-Based", color: "purple" },
@@ -700,6 +723,7 @@ export default function PolicyTemplateWizard({
   approvalRequired,
   entityTypes = [],
   actions = [],
+  actionRefs = [],
 }: PolicyTemplateWizardProps) {
   const [step, setStep] = useState(0);
   const [selectedTemplate, setSelectedTemplate] = useState<PolicyTemplate | null>(null);
@@ -742,9 +766,33 @@ export default function PolicyTemplateWizard({
     ? POLICY_TEMPLATES.filter((t) => t.category === categoryFilter)
     : POLICY_TEMPLATES;
 
-  const generatedPolicy = selectedTemplate
-    ? selectedTemplate.generatePolicy(variableValues)
-    : "";
+  const inferredUserType = useMemo(
+    () => entityTypes.find((t) => t === "User" || t.endsWith("::User")) || "User",
+    [entityTypes]
+  );
+  const inferredGroupType = useMemo(
+    () => entityTypes.find((t) => t === "Group" || t.endsWith("::Group")) || "Group",
+    [entityTypes]
+  );
+  const defaultActionType = useMemo(
+    () => actionRefs[0]?.actionType || "Action",
+    [actionRefs]
+  );
+  const actionTypeByID = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const ref of actionRefs) {
+      if (!map.has(ref.actionId)) {
+        map.set(ref.actionId, ref.actionType);
+      }
+    }
+    return map;
+  }, [actionRefs]);
+
+  const generatedPolicy = useMemo(() => {
+    if (!selectedTemplate) return "";
+    const base = selectedTemplate.generatePolicy(variableValues);
+    return applySchemaTypeHints(base, inferredUserType, inferredGroupType, defaultActionType, actionTypeByID);
+  }, [selectedTemplate, variableValues, inferredUserType, inferredGroupType, defaultActionType, actionTypeByID]);
 
   const canProceedStep1 = selectedTemplate !== null;
   const canProceedStep2 = selectedTemplate?.variables.every(

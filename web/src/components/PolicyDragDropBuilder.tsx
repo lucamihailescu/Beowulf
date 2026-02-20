@@ -10,7 +10,7 @@ import {
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
-import { Card, Space, Typography, Tag, Input, Button, Divider, theme, Alert, Tooltip, Row, Col, Switch } from "antd";
+import { Card, Space, Typography, Tag, Input, Button, Divider, theme, Alert, Tooltip, Row, Col, Collapse } from "antd";
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -37,6 +37,14 @@ interface PolicyElement {
   description?: string;
 }
 
+type ActionRefOption = {
+  actionType: string;
+  actionId: string;
+  principalTypes?: string[];
+  resourceTypes?: string[];
+  contextAttributes?: string[];
+};
+
 interface DraggableItemProps {
   id: string;
   element: PolicyElement;
@@ -56,6 +64,51 @@ const elementDescriptions: Record<string, string> = {
   resource: "The target of the action (e.g., a document or folder)",
 };
 
+function isGroupType(type?: string): boolean {
+  if (!type) return false;
+  return type === "Group" || type.endsWith("::Group");
+}
+
+const paletteGroupOrder: PolicyElementType[] = ["effect", "principal", "action", "resource"];
+const paletteGroupLabels: Record<PolicyElementType, string> = {
+  effect: "Effects",
+  principal: "Principals",
+  action: "Actions",
+  resource: "Resources",
+};
+
+function isPaletteGroupKey(value: string): value is PolicyElementType {
+  return value === "effect" || value === "principal" || value === "action" || value === "resource";
+}
+
+function stripNamespace(value?: string): string {
+  if (!value) return "";
+  const parts = value.split("::");
+  return parts[parts.length - 1] || value;
+}
+
+function humanizeIdentifier(value?: string): string {
+  if (!value) return "";
+  const source = stripNamespace(value);
+  const withSpaces = source
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[._-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!withSpaces) return source;
+  return withSpaces
+    .split(" ")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function formatTypeList(types?: string[]): string {
+  if (!types || types.length === 0) return "";
+  const normalized = types.map((t) => stripNamespace(t));
+  if (normalized.length <= 2) return normalized.join(", ");
+  return `${normalized.slice(0, 2).join(", ")} +${normalized.length - 2}`;
+}
+
 // Draggable item component
 function DraggableItem({ id, element, isTemplate, showDescription, compact }: DraggableItemProps) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
@@ -63,6 +116,8 @@ function DraggableItem({ id, element, isTemplate, showDescription, compact }: Dr
     data: { element, isTemplate },
   });
   const { token } = theme.useToken();
+  const isActionOrResource = element.type === "action" || element.type === "resource";
+  const useFocusedTemplateLayout = Boolean(isTemplate && isActionOrResource && !compact);
 
   const getIcon = () => {
     switch (element.type) {
@@ -73,7 +128,7 @@ function DraggableItem({ id, element, isTemplate, showDescription, compact }: Dr
           <CloseCircleOutlined style={{ color: "#ff4d4f", fontSize: compact ? 14 : 18 }} />
         );
       case "principal":
-        return element.entityType === "Group" ? (
+        return isGroupType(element.entityType) ? (
           <TeamOutlined style={{ color: "#1890ff", fontSize: compact ? 14 : 18 }} />
         ) : (
           <UserOutlined style={{ color: "#1890ff", fontSize: compact ? 14 : 18 }} />
@@ -112,6 +167,7 @@ function DraggableItem({ id, element, isTemplate, showDescription, compact }: Dr
   };
 
   const getDescription = () => {
+    if (element.description) return element.description;
     if (element.type === "effect") {
       return elementDescriptions[element.value];
     }
@@ -121,45 +177,83 @@ function DraggableItem({ id, element, isTemplate, showDescription, compact }: Dr
     return elementDescriptions[element.type];
   };
 
+  const getDisplayTitle = () => {
+    if (element.type === "effect") return element.value.toUpperCase();
+    if (isActionOrResource) {
+      const focusedLabel = humanizeIdentifier(element.entityId || element.value);
+      return focusedLabel || humanizeIdentifier(element.entityType) || element.type.toUpperCase();
+    }
+    return humanizeIdentifier(element.entityType || element.type) || element.type.toUpperCase();
+  };
+
+  const getSecondaryText = () => {
+    if (!element.entityType) return "";
+    if (isActionOrResource) {
+      return element.entityId ? `${element.entityType}::${element.entityId}` : element.entityType;
+    }
+    if (compact) return `::${element.entityId || ""}`;
+    return element.entityId ? `${element.entityType}::${element.entityId}` : element.entityType;
+  };
+
+  const descriptionText = getDescription();
+  const showInlineDescription = showDescription && !compact && (!isActionOrResource || Boolean(element.description));
+
   const content = (
     <div
       ref={setNodeRef}
       {...listeners}
       {...attributes}
       style={{
-        padding: compact ? "6px 10px" : "12px 16px",
+        padding: compact ? "6px 10px" : useFocusedTemplateLayout ? "8px 12px" : "12px 16px",
         background: getColor(),
         border: `2px solid ${getBorderColor()}`,
-        borderRadius: compact ? 6 : 10,
+        borderRadius: compact ? 6 : 8,
         cursor: isDragging ? "grabbing" : "grab",
         opacity: isDragging ? 0.5 : 1,
         display: "flex",
         alignItems: "flex-start",
-        gap: compact ? 8 : 12,
+        gap: compact ? 8 : useFocusedTemplateLayout ? 10 : 12,
         userSelect: "none",
-        minWidth: isTemplate ? 160 : (compact ? 100 : 120),
+        minWidth: isTemplate ? (useFocusedTemplateLayout ? 130 : 160) : (compact ? 100 : 120),
+        maxWidth: isTemplate ? 260 : undefined,
         boxShadow: isDragging ? token.boxShadow : "0 1px 3px rgba(0,0,0,0.08)",
         transition: "box-shadow 0.2s, transform 0.2s",
       }}
     >
       <div style={{ paddingTop: compact ? 0 : 2 }}>{getIcon()}</div>
-      <div style={{ flex: 1 }}>
-        <Typography.Text strong style={{ fontSize: compact ? 11 : 13, display: "block", marginBottom: compact ? 0 : 2 }}>
-          {element.type === "effect" ? element.value.toUpperCase() : element.entityType || element.type.toUpperCase()}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <Typography.Text
+          strong
+          style={{
+            fontSize: compact ? 11 : useFocusedTemplateLayout ? 12 : 13,
+            display: "block",
+            marginBottom: compact ? 0 : 2,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+          title={getDisplayTitle()}
+        >
+          {getDisplayTitle()}
         </Typography.Text>
-        {element.entityType && !compact && (
-          <Typography.Text style={{ fontSize: 11, color: token.colorTextSecondary }}>
-            {element.entityType}::{element.entityId}
+        {element.entityType && (
+          <Typography.Text
+            style={{
+              fontSize: compact ? 10 : 11,
+              color: token.colorTextSecondary,
+              display: "block",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+            title={getSecondaryText()}
+          >
+            {getSecondaryText()}
           </Typography.Text>
         )}
-        {element.entityType && compact && (
-          <Typography.Text style={{ fontSize: 10, color: token.colorTextSecondary }}>
-            ::{element.entityId}
-          </Typography.Text>
-        )}
-        {showDescription && !compact && (
+        {showInlineDescription && (
           <Typography.Text type="secondary" style={{ fontSize: 11, display: "block", marginTop: 4 }}>
-            {getDescription()}
+            {descriptionText}
           </Typography.Text>
         )}
       </div>
@@ -168,7 +262,7 @@ function DraggableItem({ id, element, isTemplate, showDescription, compact }: Dr
 
   if (isTemplate) {
     return (
-      <Tooltip title={getDescription()} placement="top">
+      <Tooltip title={descriptionText} placement="top">
         {content}
       </Tooltip>
     );
@@ -197,7 +291,7 @@ function PrincipalItem({ principal, onEdit, onRemove }: PrincipalItemProps) {
       borderRadius: 6,
       border: `1px solid ${token.colorBorder}`,
     }}>
-      {principal.entityType === "Group" ? (
+      {isGroupType(principal.entityType) ? (
         <TeamOutlined style={{ color: "#1890ff" }} />
       ) : (
         <UserOutlined style={{ color: "#1890ff" }} />
@@ -412,12 +506,14 @@ interface PolicyDragDropBuilderProps {
   onPolicyGenerated: (policyText: string) => void;
   entityTypes?: string[];
   entityIdsByType?: Map<string, string[]>;
+  actionRefs?: ActionRefOption[];
 }
 
 export default function PolicyDragDropBuilder({
   onPolicyGenerated,
   entityTypes = ["User", "Group", "Document", "Folder", "Action"],
   entityIdsByType = new Map(),
+  actionRefs = [],
 }: PolicyDragDropBuilderProps) {
   const { token } = theme.useToken();
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
@@ -427,41 +523,133 @@ export default function PolicyDragDropBuilder({
   const [principals, setPrincipals] = useState<PolicyElement[]>([]);
   const [action, setAction] = useState<PolicyElement | null>(null);
   const [resource, setResource] = useState<PolicyElement | null>(null);
+  const [paletteFilter, setPaletteFilter] = useState("");
+  const [openPaletteGroups, setOpenPaletteGroups] = useState<PolicyElementType[]>(["effect", "principal"]);
 
   // Template elements for the palette
   const templateElements: PolicyElement[] = useMemo(() => {
+    const firstAction = actionRefs[0] ?? { actionType: "Action", actionId: "view" };
+    const defaultResourceType =
+      entityTypes.find((t) => !t.endsWith("::User") && !t.endsWith("::Group") && t !== "User" && t !== "Group" && !t.endsWith("::Action") && t !== "Action") ||
+      "Document";
+
     const elements: PolicyElement[] = [
       { id: "tpl-permit", type: "effect", value: "permit", description: "Allows the action" },
       { id: "tpl-forbid", type: "effect", value: "forbid", description: "Denies the action" },
       { id: "tpl-user", type: "principal", value: "User", entityType: "User", entityId: "alice" },
       { id: "tpl-group", type: "principal", value: "Group", entityType: "Group", entityId: "admins" },
-      { id: "tpl-action", type: "action", value: "Action", entityType: "Action", entityId: "view" },
-      { id: "tpl-resource", type: "resource", value: "Resource", entityType: "Document", entityId: "doc-1" },
+      { id: "tpl-action", type: "action", value: firstAction.actionId, entityType: firstAction.actionType, entityId: firstAction.actionId },
+      { id: "tpl-resource", type: "resource", value: "Resource", entityType: defaultResourceType, entityId: "resource-1" },
     ];
 
-    // Add entity-based templates if available
+    // Add schema-derived action templates when available.
+    actionRefs.forEach((ref) => {
+      const principalHint = formatTypeList(ref.principalTypes);
+      const resourceHint = formatTypeList(ref.resourceTypes);
+      const contextCount = ref.contextAttributes?.length ?? 0;
+      const descriptionParts = [
+        principalHint ? `Principal: ${principalHint}` : "",
+        resourceHint ? `Resource: ${resourceHint}` : "",
+        contextCount > 0 ? `Context attrs: ${contextCount}` : "",
+      ].filter(Boolean);
+
+      elements.push({
+        id: `tpl-action-${ref.actionType}-${ref.actionId}`.replace(/[^a-zA-Z0-9_-]/g, "-"),
+        type: "action",
+        value: ref.actionId,
+        entityType: ref.actionType,
+        entityId: ref.actionId,
+        description: descriptionParts.length > 0 ? descriptionParts.join(" | ") : undefined,
+      });
+    });
+
+    const isPrincipalType = (type: string) => type === "User" || type === "Group" || type.endsWith("::User") || type.endsWith("::Group");
+    const isActionType = (type: string) => type === "Action" || type.endsWith("::Action");
+
+    // Add schema/entity type templates even without pre-seeded entities.
+    // This ensures newly introduced resource types (e.g., EmailRecipient/HttpEndpoint) show up immediately.
     entityTypes.forEach((type) => {
       if (!["User", "Group", "Document", "Folder", "Action"].includes(type)) {
         const ids = entityIdsByType.get(type) || [];
-        if (ids.length > 0) {
-          elements.push({
-            id: `tpl-${type.toLowerCase()}`,
-            type: type === "Action" ? "action" : "principal",
-            value: type,
-            entityType: type,
-            entityId: ids[0],
-          });
-        }
+        const elementType: PolicyElementType = isActionType(type)
+          ? "action"
+          : isPrincipalType(type)
+            ? "principal"
+            : "resource";
+        const fallbackID =
+          ids[0] ||
+          (elementType === "principal"
+            ? "example-principal"
+            : elementType === "action"
+              ? "example.action"
+              : "example-resource");
+
+        elements.push({
+          id: `tpl-${type.toLowerCase()}`.replace(/[^a-zA-Z0-9_-]/g, "-"),
+          type: elementType,
+          value: type,
+          entityType: type,
+          entityId: fallbackID,
+        });
       }
     });
 
-    return elements;
-  }, [entityTypes, entityIdsByType]);
+    // Deduplicate templates by type + entity ref.
+    const seen = new Set<string>();
+    return elements.filter((el) => {
+      const key = `${el.type}|${el.entityType || ""}|${el.entityId || ""}|${el.value}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [entityTypes, entityIdsByType, actionRefs]);
 
   const activeElement = useMemo(() => {
     if (!activeId) return null;
     return templateElements.find((e) => e.id === activeId) || null;
   }, [activeId, templateElements]);
+
+  const filteredTemplateElements = useMemo(() => {
+    const filterValue = paletteFilter.trim().toLowerCase();
+    if (!filterValue) return templateElements;
+
+    return templateElements.filter((element) => {
+      const searchTokens = [
+        element.type,
+        element.value,
+        element.entityType,
+        element.entityId,
+        elementDescriptions[element.value],
+        element.entityType ? elementDescriptions[element.entityType] : "",
+        elementDescriptions[element.type],
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return searchTokens.includes(filterValue);
+    });
+  }, [templateElements, paletteFilter]);
+
+  const groupedTemplateElements = useMemo(() => {
+    const grouped: Record<PolicyElementType, PolicyElement[]> = {
+      effect: [],
+      principal: [],
+      action: [],
+      resource: [],
+    };
+
+    filteredTemplateElements.forEach((element) => {
+      grouped[element.type].push(element);
+    });
+
+    return grouped;
+  }, [filteredTemplateElements]);
+
+  function handlePaletteGroupChange(keys: string | string[]) {
+    const normalized = (Array.isArray(keys) ? keys : [keys]).filter(isPaletteGroupKey);
+    setOpenPaletteGroups(normalized);
+  }
 
   function handleDragStart(event: DragStartEvent) {
     setActiveId(event.active.id as string);
@@ -510,7 +698,7 @@ export default function PolicyDragDropBuilder({
     const escapeCedarString = (s: string) => s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 
     return principals.map((principal) => {
-      const operator = principal.entityType === "Group" ? "in" : "==";
+      const operator = isGroupType(principal.entityType) ? "in" : "==";
       return `${effect.value} (
   principal ${operator} ${principal.entityType}::"${escapeCedarString(principal.entityId || "")}",
   action == ${action.entityType}::"${escapeCedarString(action.entityId || "")}",
@@ -565,17 +753,70 @@ export default function PolicyDragDropBuilder({
 
         {/* Palette */}
         <div>
-          <Typography.Text strong style={{ display: "block", marginBottom: 8 }}>
-            Policy Elements <Typography.Text type="secondary" style={{ fontWeight: "normal" }}>(drag to canvas)</Typography.Text>
-          </Typography.Text>
-          
-          <Row gutter={[8, 8]}>
-            {templateElements.map((element) => (
-              <Col key={element.id}>
-                <DraggableItem id={element.id} element={element} isTemplate showDescription />
-              </Col>
-            ))}
-          </Row>
+          <Space style={{ width: "100%", justifyContent: "space-between", marginBottom: 8 }} align="center">
+            <Typography.Text strong>
+              Policy Elements <Typography.Text type="secondary" style={{ fontWeight: "normal" }}>(drag to canvas)</Typography.Text>
+            </Typography.Text>
+            <Space size={4}>
+              <Button type="text" size="small" onClick={() => setOpenPaletteGroups(paletteGroupOrder)}>
+                Expand all
+              </Button>
+              <Button type="text" size="small" onClick={() => setOpenPaletteGroups([])}>
+                Collapse all
+              </Button>
+            </Space>
+          </Space>
+
+          <Input
+            size="small"
+            allowClear
+            placeholder="Filter by type, id, or description"
+            value={paletteFilter}
+            onChange={(e) => setPaletteFilter(e.target.value)}
+            style={{ marginBottom: 10, maxWidth: 420 }}
+          />
+
+          {filteredTemplateElements.length === 0 ? (
+            <div
+              style={{
+                padding: 16,
+                border: `1px dashed ${token.colorBorder}`,
+                borderRadius: 8,
+                background: token.colorBgContainer,
+              }}
+            >
+              <Typography.Text type="secondary">No policy elements match the current filter.</Typography.Text>
+            </div>
+          ) : (
+            <Collapse
+              size="small"
+              activeKey={openPaletteGroups}
+              onChange={handlePaletteGroupChange}
+              items={paletteGroupOrder.map((groupKey) => ({
+                key: groupKey,
+                label: (
+                  <Space size={8}>
+                    <Typography.Text strong>{paletteGroupLabels[groupKey]}</Typography.Text>
+                    <Tag>{groupedTemplateElements[groupKey].length}</Tag>
+                  </Space>
+                ),
+                children:
+                  groupedTemplateElements[groupKey].length > 0 ? (
+                    <Row gutter={[8, 8]}>
+                      {groupedTemplateElements[groupKey].map((element) => (
+                        <Col key={element.id}>
+                          <DraggableItem id={element.id} element={element} isTemplate showDescription />
+                        </Col>
+                      ))}
+                    </Row>
+                  ) : (
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      No matching {paletteGroupLabels[groupKey].toLowerCase()}.
+                    </Typography.Text>
+                  ),
+              }))}
+            />
+          )}
         </div>
 
         <Divider style={{ margin: 0 }}>

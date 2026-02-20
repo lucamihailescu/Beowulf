@@ -93,6 +93,19 @@ export type CreatePolicyRequest = {
   activate?: boolean;
 };
 
+export type PolicyValidation = {
+  valid: boolean;
+  warnings?: string[];
+  errors?: string[];
+};
+
+export type CreatePolicyResponse = {
+  policy_id: number;
+  version: number;
+  status: string;
+  validation?: PolicyValidation;
+};
+
 export type PolicySummary = {
   id: number;
   name: string;
@@ -151,6 +164,29 @@ export type Schema = {
 export type CreateSchemaRequest = {
   schema_text: string;
   activate?: boolean;
+};
+
+export type SchemaNamespaceMetadata = {
+  name: string;
+  entity_types: string[];
+  actions: string[];
+};
+
+export type SchemaActionMetadata = {
+  namespace: string;
+  name: string;
+  action_type: string;
+  principal_types?: string[];
+  resource_types?: string[];
+  context_attributes?: string[];
+};
+
+export type SchemaMetadata = {
+  namespaces: SchemaNamespaceMetadata[];
+  entity_types: string[];
+  actions: SchemaActionMetadata[];
+  action_ids: string[];
+  context_attributes: string[];
 };
 
 export type AuditLog = {
@@ -648,8 +684,8 @@ export const api = {
     });
   },
 
-  createPolicy(appId: number, payload: CreatePolicyRequest): Promise<{ policy_id: number; version: number; status: string }> {
-    return request<{ policy_id: number; version: number; status: string }>(`/v1/apps/${appId}/policies`, {
+  createPolicy(appId: number, payload: CreatePolicyRequest): Promise<CreatePolicyResponse> {
+    return request<CreatePolicyResponse>(`/v1/apps/${appId}/policies`, {
       method: "POST",
       body: JSON.stringify(payload),
     });
@@ -719,6 +755,10 @@ export const api = {
 
   getActiveSchema(appId: number): Promise<Schema> {
     return request<Schema>(`/v1/apps/${appId}/schemas/active`);
+  },
+
+  getActiveSchemaMetadata(appId: number): Promise<SchemaMetadata> {
+    return request<SchemaMetadata>(`/v1/apps/${appId}/schemas/active/metadata`);
   },
 
   activateSchema(appId: number, version: number): Promise<void> {

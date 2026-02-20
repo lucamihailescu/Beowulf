@@ -134,6 +134,8 @@ Use existing entry points:
 
 - `POST /v1/authorize`: enforce guardrails before tool execution.
 - `POST /v1/entitlements`: inspect effective delegated-user capabilities for preflight UX and audit tooling.
+- `GET /v1/apps/{id}/schemas/active/metadata`: drive namespace-aware policy UI selectors for `AgentGuardrails::*` types/actions.
+- `POST /v1/apps/{id}/policies`: returns additive `validation.warnings` when policy text references unknown action/types/context for the active schema.
 
 ## Staged Rollout and Audit Validation
 

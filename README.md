@@ -21,6 +21,8 @@ A full-stack implementation for managing [Cedar](https://github.com/cedar-policy
 - **Cedar Schemas** — Upload and manage Cedar schemas per application
 - **Schema Versioning** — Maintain multiple schema versions with activation control
 - **JSON Schema Format** — Support for Cedar's JSON schema format
+- **Schema Metadata API** — Namespace-aware metadata for entity/action/context discovery
+- **Namespace-Aware Policy UX** — Policy editor/simulator/template flows support multi-namespace types and actions
 
 ### Audit Trail
 - **Decision Logging** — Every authorization decision is logged with full context
@@ -290,6 +292,20 @@ Content-Type: application/json
 }
 ```
 
+Policy create/update responses now include additive schema-validation feedback:
+
+```json
+{
+  "policy_id": 42,
+  "version": 3,
+  "status": "draft",
+  "validation": {
+    "valid": true,
+    "warnings": ["action \"unknown.action\" is not defined in the active schema"]
+  }
+}
+```
+
 ### Entities
 
 | Method | Endpoint | Description |
@@ -316,6 +332,7 @@ Content-Type: application/json
 |--------|----------|-------------|
 | `GET` | `/v1/apps/{id}/schemas/` | List schema versions |
 | `GET` | `/v1/apps/{id}/schemas/active` | Get active schema |
+| `GET` | `/v1/apps/{id}/schemas/active/metadata` | Get normalized active schema metadata (namespaces, types, actions, context attrs) |
 | `POST` | `/v1/apps/{id}/schemas/` | Create a new schema version |
 | `POST` | `/v1/apps/{id}/schemas/activate` | Activate a schema version |
 

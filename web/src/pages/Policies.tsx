@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { Alert, Button, Card, Checkbox, Col, Collapse, Input, Modal, Row, Select, Space, Table, Tabs, Tag, Typography, theme, message } from "antd";
 import { FileTextOutlined, PlusOutlined, ThunderboltOutlined, EyeOutlined, AppstoreOutlined, WifiOutlined, ExperimentOutlined } from "@ant-design/icons";
-import { api, type Application, type AuthorizeResponse, type CedarEntity, type PolicyDetails, type PolicySummary, type Schema } from "../api";
+import { api, type Application, type AuthorizeResponse, type CedarEntity, type PolicyDetails, type PolicySummary, type Schema, type SchemaMetadata } from "../api";
 import PolicyDragDropBuilder from "../components/PolicyDragDropBuilder";
 import PolicyTemplateWizard from "../components/PolicyTemplateWizard";
 import PolicySimulator from "../components/PolicySimulator";
 import { usePolicyUpdates, useSSEContext } from "../contexts/SSEContext";
+import { normalizeSchemaMetadata, parseSchemaMetadataFromText } from "../schemaMetadata";
 
 const DEFAULT_POLICY = `permit (
   principal == User::"alice",
@@ -39,6 +40,8 @@ export default function Policies() {
   const [entitiesLoading, setEntitiesLoading] = useState(false);
 
   const [activeSchema, setActiveSchema] = useState<Schema | null>(null);
+  const [activeSchemaMetadata, setActiveSchemaMetadata] = useState<SchemaMetadata | null>(null);
+  const [policyValidationWarnings, setPolicyValidationWarnings] = useState<string[]>([]);
 
   const [selectedAppId, setSelectedAppId] = useState<number | "">("");
   const [name, setName] = useState("");
@@ -158,6 +161,37 @@ export default function Policies() {
     })();
   }, [selectedAppId]);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (selectedAppId === "") {
+      setActiveSchemaMetadata(null);
+      return;
+    }
+    (async () => {
+      try {
+        const metadata = await api.getActiveSchemaMetadata(selectedAppId as number);
+        if (!cancelled) {
+          setActiveSchemaMetadata(metadata);
+        }
+      } catch {
+        const fallback = activeSchema?.schema_text
+          ? parseSchemaMetadataFromText(activeSchema.schema_text)
+          : null;
+        if (!cancelled) {
+          setActiveSchemaMetadata(fallback);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedAppId, activeSchema?.schema_text]);
+
+  const normalizedSchema = useMemo(
+    () => normalizeSchemaMetadata(activeSchemaMetadata),
+    [activeSchemaMetadata]
+  );
+
   // Parse entity types from both schema and actual entities
   const entityTypes = useMemo(() => {
     const set = new Set<string>();
@@ -168,42 +202,20 @@ export default function Policies() {
       if (e?.uid?.type) set.add(e.uid.type);
     }
     
-    // Add types from active schema
-    if (activeSchema?.schema_text) {
-      try {
-        const parsed = JSON.parse(activeSchema.schema_text);
-        // Cedar schema format: { "": { entityTypes: {...}, actions: {...} } }
-        const namespace = parsed[""] || parsed;
-        if (namespace?.entityTypes) {
-          for (const typeName of Object.keys(namespace.entityTypes)) {
-            set.add(typeName);
-          }
-        }
-      } catch (e) {
-        // Ignore parse errors
-      }
+    // Add schema-derived types (namespace-aware).
+    for (const typeName of normalizedSchema.entityTypes) {
+      set.add(typeName);
     }
     
     return Array.from(set).sort();
-  }, [entities, activeSchema]);
+  }, [entities, normalizedSchema.entityTypes]);
 
   // Parse actions from active schema
   const schemaActions = useMemo(() => {
-    if (!activeSchema?.schema_text) return [];
-    
-    try {
-      const parsed = JSON.parse(activeSchema.schema_text);
-      // Cedar schema format: { "": { entityTypes: {...}, actions: {...} } }
-      const namespace = parsed[""] || parsed;
-      if (namespace?.actions) {
-        return Object.keys(namespace.actions).sort();
-      }
-    } catch (e) {
-      // Ignore parse errors
-    }
-    
-    return [];
-  }, [activeSchema]);
+    return normalizedSchema.actionIds;
+  }, [normalizedSchema.actionIds]);
+
+  const schemaActionRefs = useMemo(() => normalizedSchema.actionRefs, [normalizedSchema.actionRefs]);
 
   const entityIdsByType = useMemo(() => {
     const map = new Map<string, string[]>();
@@ -225,6 +237,7 @@ export default function Policies() {
   async function onCreatePolicy() {
     setError("");
     setNotice("");
+    setPolicyValidationWarnings([]);
     setAuthzResult(null);
     if (selectedAppId === "") {
       setError("Select an application first.");
@@ -244,6 +257,7 @@ export default function Policies() {
       } else {
         setNotice("Policy saved successfully!");
       }
+      setPolicyValidationWarnings(res.validation?.warnings ?? []);
       setName("");
       setDescription("");
       setPolicyText(DEFAULT_POLICY);
@@ -274,21 +288,26 @@ export default function Policies() {
     } else {
       setNotice("Policy saved successfully!");
     }
+    setPolicyValidationWarnings(res.validation?.warnings ?? []);
     const items = await api.listPolicies(selectedAppId);
     setPolicies(items);
     setActiveTab("view");
     setTemplateWizardOpen(false);
   }
 
-  async function openPolicyModal(policyId: number) {
+  async function openPolicyModal(policy: PolicySummary) {
     if (selectedAppId === "") return;
     setError("");
     setNotice("");
     setPolicyModalOpen(true);
     setPolicyModalLoading(true);
     try {
-      const item = await api.getPolicy(selectedAppId, policyId);
-      setSelectedPolicy(item);
+      const item = await api.getPolicy(selectedAppId, policy.id);
+      const mergedPolicy =
+        item.active_version === 0 && policy.active_version > 0
+          ? { ...item, active_version: policy.active_version }
+          : item;
+      setSelectedPolicy(mergedPolicy);
       setEditDescription(item.description ?? "");
       setEditPolicyText(item.latest_policy_text ?? "");
       setEditActivate(true);
@@ -380,6 +399,7 @@ export default function Policies() {
       } else {
         setNotice("Policy updated (new version created).");
       }
+      setPolicyValidationWarnings(res.validation?.warnings ?? []);
       const items = await api.listPolicies(selectedAppId);
       setPolicies(items);
       closePolicyModal();
@@ -391,9 +411,43 @@ export default function Policies() {
   }
 
   function parseRef(v: string): { type: string; id: string } {
-    const [type, id] = v.split(":");
-    return { type: type ?? "", id: id ?? "" };
+    const raw = v.trim();
+    if (!raw) return { type: "", id: "" };
+
+    // Accept full Cedar UID literal format: Type::"id"
+    const cedarQuoted = raw.match(/^(.+)::"((?:\\.|[^"\\])*)"$/);
+    if (cedarQuoted) {
+      const [, typePart, idPart] = cedarQuoted;
+      return { type: typePart.trim(), id: idPart.replace(/\\"/g, '"').replace(/\\\\/g, "\\") };
+    }
+
+    // Accept Type::id shorthand when users paste Cedar-ish values without quotes.
+    // This branch only applies when there is no single-colon type:id separator.
+    if (!raw.match(/(?<!:):(?!:)/)) {
+      const doubleIdx = raw.lastIndexOf("::");
+      if (doubleIdx > 0) {
+        return { type: raw.slice(0, doubleIdx).trim(), id: raw.slice(doubleIdx + 2).trim() };
+      }
+    }
+
+    // Default UI format: Type:id where type may include namespace (::) and id may include ':'
+    // Split on first single ':' that is not part of '::'
+    const singleSep = raw.match(/^(.+?)(?<!:):(?!:)([\s\S]+)$/);
+    if (singleSep) {
+      const [, typePart, idPart] = singleSep;
+      return { type: typePart.trim(), id: idPart.trim() };
+    }
+
+    return { type: raw, id: "" };
   }
+
+  useEffect(() => {
+    if (schemaActionRefs.length === 0) return;
+    if (authzAction === "Action:view" || !authzAction.includes(":")) {
+      const first = schemaActionRefs[0];
+      setAuthzAction(`${first.actionType}:${first.actionId}`);
+    }
+  }, [schemaActionRefs, authzAction]);
 
   async function onAuthorize() {
     setError("");
@@ -447,7 +501,7 @@ export default function Policies() {
               pagination={false}
               dataSource={policies}
               onRow={(record) => ({
-                onClick: () => openPolicyModal(record.id),
+                onClick: () => openPolicyModal(record),
                 style: { cursor: "pointer" },
               })}
               columns={[
@@ -457,7 +511,7 @@ export default function Policies() {
                   title: "Active", 
                   dataIndex: "active_version", 
                   width: 80, 
-                  render: (v) => v ? <Tag color="green">v{v}</Tag> : <Tag>—</Tag>
+                  render: (v) => (v ? <Tag color="green">v{v}</Tag> : <Tag color="orange">No active</Tag>)
                 },
                 { 
                   title: "Latest", 
@@ -526,6 +580,7 @@ export default function Policies() {
                 onPolicyGenerated={(generatedPolicy) => setPolicyText(generatedPolicy)}
                 entityTypes={entityTypes}
                 entityIdsByType={entityIdsByType}
+                actionRefs={schemaActionRefs}
               />
             </Space>
           </Col>
@@ -646,11 +701,38 @@ export default function Policies() {
                   <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>
                     Action (What do they want to do?)
                   </Typography.Text>
-                  <Input 
-                    value={authzAction} 
-                    onChange={(e) => setAuthzAction(e.target.value)}
-                    placeholder="Action:view"
-                  />
+                  {schemaActionRefs.length > 0 ? (
+                    <Select
+                      showSearch
+                      allowClear
+                      value={authzAction || undefined}
+                      onChange={(v) => setAuthzAction(v || "")}
+                      placeholder="Select schema action or enter custom..."
+                      options={schemaActionRefs.map((a) => ({
+                        value: `${a.actionType}:${a.actionId}`,
+                        label: `${a.actionType}:${a.actionId}`,
+                      }))}
+                      dropdownRender={(menu) => (
+                        <>
+                          {menu}
+                          <div style={{ padding: 8, borderTop: "1px solid #f0f0f0" }}>
+                            <Input
+                              size="small"
+                              placeholder="Or enter custom Type:id"
+                              value={authzAction}
+                              onChange={(e) => setAuthzAction(e.target.value)}
+                            />
+                          </div>
+                        </>
+                      )}
+                    />
+                  ) : (
+                    <Input 
+                      value={authzAction} 
+                      onChange={(e) => setAuthzAction(e.target.value)}
+                      placeholder="Type:id (e.g., Action:view or AgentGuardrails::Action:email.send)"
+                    />
+                  )}
                 </div>
                 
                 <div>
@@ -741,6 +823,16 @@ export default function Policies() {
       {/* Alerts */}
       {error && <Alert type="error" showIcon message={error} closable onClose={() => setError("")} />}
       {notice && <Alert type="success" showIcon message={notice} closable onClose={() => setNotice("")} />}
+      {policyValidationWarnings.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          closable
+          onClose={() => setPolicyValidationWarnings([])}
+          message="Schema validation warnings"
+          description={policyValidationWarnings.join(" ")}
+        />
+      )}
 
       {/* Application Selector */}
       <Card size="small">
@@ -832,7 +924,11 @@ export default function Policies() {
         ) : (
           <Space direction="vertical" size={16} style={{ width: "100%" }}>
             <Space>
-              <Tag color="green">Active: v{selectedPolicy.active_version || "—"}</Tag>
+              {selectedPolicy.active_version > 0 ? (
+                <Tag color="green">Active: v{selectedPolicy.active_version}</Tag>
+              ) : (
+                <Tag color="orange">No active version</Tag>
+              )}
               <Tag>Latest: v{selectedPolicy.latest_version || "—"}</Tag>
             </Space>
 
@@ -878,6 +974,7 @@ export default function Policies() {
         approvalRequired={selectedApp?.approval_required}
         entityTypes={entityTypes}
         actions={schemaActions}
+        actionRefs={schemaActionRefs}
       />
 
       {/* Policy Simulator */}

@@ -62,12 +62,12 @@ func (s *PermissionsService) ListPermissions(ctx context.Context, applicationID 
 		return nil, fmt.Errorf("load group memberships: %w", err)
 	}
 
-	// Convert group refs to string slice for matching
+	// Keep both typed refs (for matching) and IDs (for response compatibility).
+	groupMembershipRefs := make([]GroupRef, 0, len(groupRefs))
 	groupMemberships := make([]string, 0, len(groupRefs))
 	for _, g := range groupRefs {
-		if g.Type == "Group" {
-			groupMemberships = append(groupMemberships, g.ID)
-		}
+		groupMembershipRefs = append(groupMembershipRefs, g)
+		groupMemberships = append(groupMemberships, g.ID)
 	}
 
 	// Parse all policies
@@ -79,7 +79,7 @@ func (s *PermissionsService) ListPermissions(ctx context.Context, applicationID 
 	forbiddenActionsMap := make(map[string]bool)
 
 	for _, p := range parsedPolicies {
-		if !p.MatchesPrincipal(principalType, principalID, groupMemberships) {
+		if !p.MatchesPrincipal(principalType, principalID, groupMembershipRefs) {
 			continue
 		}
 
@@ -128,4 +128,3 @@ func (s *PermissionsService) ListPermissions(ctx context.Context, applicationID 
 		GroupMemberships: groupMemberships,
 	}, nil
 }
-

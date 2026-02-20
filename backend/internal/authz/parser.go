@@ -22,30 +22,22 @@ var (
 	// Match "permit" or "forbid" at the start
 	effectRegex = regexp.MustCompile(`(?i)^\s*(permit|forbid)\s*\(`)
 
-	// Match principal clause patterns
-	// Examples:
-	//   principal
-	//   principal == User::"alice"
-	//   principal in Group::"admins"
-	//   principal is User
-	principalRegex = regexp.MustCompile(`principal\s*(?:(==|in|is)\s*([A-Za-z_][A-Za-z0-9_]*)::"([^"]+)"|(?:is\s+([A-Za-z_][A-Za-z0-9_]*))|)`)
+	// Match principal clause patterns (supports namespaces).
+	principalEqInRegex = regexp.MustCompile(`principal\s*(==|in)\s*([A-Za-z_][A-Za-z0-9_:]*)::"([^"]+)"`)
+	principalIsRegex   = regexp.MustCompile(`principal\s+is\s+([A-Za-z_][A-Za-z0-9_:]*)`)
 
-	// Match action clause patterns
+	// Match action clause patterns (supports namespaced action entity type).
 	// Examples:
-	//   action
 	//   action == Action::"read"
-	//   action in [Action::"read", Action::"write"]
-	actionSingleRegex = regexp.MustCompile(`action\s*==\s*Action::"([^"]+)"`)
+	//   action == AgentGuardrails::Action::"email.send"
+	//   action in [Action::"read", AgentGuardrails::Action::"write"]
+	actionSingleRegex = regexp.MustCompile(`action\s*==\s*[A-Za-z_][A-Za-z0-9_:]*::"([^"]+)"`)
 	actionInRegex     = regexp.MustCompile(`action\s+in\s*\[([^\]]+)\]`)
-	actionItemRegex   = regexp.MustCompile(`Action::"([^"]+)"`)
+	actionItemRegex   = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_:]*::"([^"]+)"`)
 
-	// Match resource clause patterns
-	// Examples:
-	//   resource
-	//   resource == Document::"doc-123"
-	//   resource is Document
-	//   resource in Folder::"shared"
-	resourceRegex = regexp.MustCompile(`resource\s*(?:(==|in|is)\s*([A-Za-z_][A-Za-z0-9_]*)::"([^"]+)"|(?:is\s+([A-Za-z_][A-Za-z0-9_]*))|)`)
+	// Match resource clause patterns (supports namespaces).
+	resourceEqInRegex = regexp.MustCompile(`resource\s*(==|in)\s*([A-Za-z_][A-Za-z0-9_:]*)::"([^"]+)"`)
+	resourceIsRegex   = regexp.MustCompile(`resource\s+is\s+([A-Za-z_][A-Za-z0-9_:]*)`)
 
 	// Match when clause
 	whenRegex = regexp.MustCompile(`(?s)when\s*\{([^}]*)\}`)
@@ -74,26 +66,18 @@ func ParsePolicy(policyID, policyText string) ParsedPolicy {
 	}
 
 	// Extract principal constraints
-	if matches := principalRegex.FindStringSubmatch(text); len(matches) > 0 {
+	if matches := principalEqInRegex.FindStringSubmatch(text); len(matches) > 3 {
 		op := matches[1]
 		entityType := matches[2]
 		entityID := matches[3]
-		isType := matches[4]
-
-		if op == "==" && entityType != "" && entityID != "" {
-			// principal == User::"alice"
+		if op == "==" {
 			result.PrincipalType = entityType
 			result.PrincipalID = entityID
-		} else if op == "in" && entityType != "" && entityID != "" {
-			// principal in Group::"admins"
+		} else if op == "in" {
 			result.PrincipalIn = entityType + "::\"" + entityID + "\""
-		} else if op == "is" && entityType != "" {
-			// principal is User (with entity type after is, captured in group 2/3)
-			result.PrincipalType = entityType
-		} else if isType != "" {
-			// principal is User (captured in group 4)
-			result.PrincipalType = isType
 		}
+	} else if matches := principalIsRegex.FindStringSubmatch(text); len(matches) > 1 {
+		result.PrincipalType = matches[1]
 	}
 
 	// Extract action constraints
@@ -116,27 +100,13 @@ func ParsePolicy(policyID, policyText string) ParsedPolicy {
 	}
 
 	// Extract resource constraints
-	if matches := resourceRegex.FindStringSubmatch(text); len(matches) > 0 {
-		op := matches[1]
+	if matches := resourceEqInRegex.FindStringSubmatch(text); len(matches) > 3 {
 		entityType := matches[2]
 		entityID := matches[3]
-		isType := matches[4]
-
-		if op == "==" && entityType != "" && entityID != "" {
-			// resource == Document::"doc-123"
-			result.ResourceType = entityType
-			result.ResourceIDs = []string{entityID}
-		} else if op == "in" && entityType != "" && entityID != "" {
-			// resource in Folder::"shared"
-			result.ResourceType = entityType
-			result.ResourceIDs = []string{entityID}
-		} else if op == "is" && entityType != "" {
-			// resource is Document
-			result.ResourceType = entityType
-		} else if isType != "" {
-			// resource is Document (captured in group 4)
-			result.ResourceType = isType
-		}
+		result.ResourceType = entityType
+		result.ResourceIDs = []string{entityID}
+	} else if matches := resourceIsRegex.FindStringSubmatch(text); len(matches) > 1 {
+		result.ResourceType = matches[1]
 	}
 
 	// Extract when clause
@@ -158,7 +128,7 @@ func ParsePolicies(policies []PolicyText) []ParsedPolicy {
 
 // MatchesPrincipal checks if a parsed policy applies to a given principal.
 // It considers direct matches, group memberships, and wildcard principals.
-func (p *ParsedPolicy) MatchesPrincipal(principalType, principalID string, groupMemberships []string) bool {
+func (p *ParsedPolicy) MatchesPrincipal(principalType, principalID string, groupMemberships []GroupRef) bool {
 	// Wildcard principal matches everything
 	if p.PrincipalType == "*" && p.PrincipalID == "" && p.PrincipalIn == "" {
 		return true
@@ -177,9 +147,7 @@ func (p *ParsedPolicy) MatchesPrincipal(principalType, principalID string, group
 	// Group membership match (e.g., "principal in Group::\"admins\"")
 	if p.PrincipalIn != "" {
 		for _, group := range groupMemberships {
-			// Check if the policy's PrincipalIn matches any of the user's groups
-			// PrincipalIn is in format: Group::"admins"
-			expectedIn := "Group::\"" + group + "\""
+			expectedIn := group.Type + "::\"" + group.ID + "\""
 			if p.PrincipalIn == expectedIn {
 				return true
 			}
@@ -188,4 +156,3 @@ func (p *ParsedPolicy) MatchesPrincipal(principalType, principalID string, group
 
 	return false
 }
-
