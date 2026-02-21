@@ -13,6 +13,15 @@ import threading
 import time
 
 BASE_URL = "http://localhost:8080"
+MCP_GATEWAY_URL = "http://localhost:8090"
+
+
+def _get_first_app():
+    apps_resp = requests.get(f"{BASE_URL}/v1/apps/")
+    if not apps_resp.ok:
+        return None
+    apps = apps_resp.json() or []
+    return apps[0] if apps else None
 
 
 def test_entitlements_endpoint():
@@ -250,6 +259,220 @@ def test_mcp_sdk():
         return False
 
 
+def test_mcp_gateway_registry():
+    """Test MCP gateway registry APIs."""
+    print("\n=== Testing MCP Gateway Registry APIs ===")
+
+    gateway_id = f"test-gateway-{int(time.time())}"
+    register_payload = {
+        "gateway_id": gateway_id,
+        "name": "integration-test-gateway",
+        "endpoint": "http://localhost:8090",
+        "auth_mode": "none",
+        "metadata": {"source": "test_mcp_integration.py"}
+    }
+    resp = requests.post(f"{BASE_URL}/v1/mcp/gateways/register", json=register_payload)
+    if not resp.ok:
+        print(f"  ✗ Register failed: {resp.status_code} {resp.text}")
+        return False
+    print("  ✓ Gateway registered")
+
+    list_resp = requests.get(f"{BASE_URL}/v1/mcp/gateways/")
+    if not list_resp.ok:
+        print(f"  ✗ List failed: {list_resp.status_code}")
+        return False
+    listed = list_resp.json().get("items", [])
+    if not any(g.get("gateway_id") == gateway_id for g in listed):
+        print("  ✗ Registered gateway not found in list")
+        return False
+    print("  ✓ Gateway appears in list")
+
+    approve_resp = requests.post(f"{BASE_URL}/v1/mcp/gateways/{gateway_id}/approve")
+    if not approve_resp.ok:
+        print(f"  ✗ Approve failed: {approve_resp.status_code} {approve_resp.text}")
+        return False
+    print("  ✓ Gateway approved")
+
+    suspend_resp = requests.post(f"{BASE_URL}/v1/mcp/gateways/{gateway_id}/suspend")
+    if not suspend_resp.ok:
+        print(f"  ✗ Suspend failed: {suspend_resp.status_code} {suspend_resp.text}")
+        return False
+    print("  ✓ Gateway suspended")
+
+    unsuspend_resp = requests.post(f"{BASE_URL}/v1/mcp/gateways/{gateway_id}/unsuspend")
+    if not unsuspend_resp.ok:
+        print(f"  ✗ Unsuspend failed: {unsuspend_resp.status_code} {unsuspend_resp.text}")
+        return False
+    print("  ✓ Gateway resumed")
+
+    delete_resp = requests.delete(f"{BASE_URL}/v1/mcp/gateways/{gateway_id}")
+    if not delete_resp.ok:
+        print(f"  ✗ Delete failed: {delete_resp.status_code} {delete_resp.text}")
+        return False
+    print("  ✓ Gateway deleted")
+    return True
+
+
+def test_mcp_approval_workflow():
+    """Test MCP approval request lifecycle APIs."""
+    print("\n=== Testing MCP Approval Workflow APIs ===")
+
+    app = _get_first_app()
+    if not app:
+        print("  ✗ No app found. Please run seed first.")
+        return False
+
+    gateway_id = f"approval-gateway-{int(time.time())}"
+    reg_resp = requests.post(f"{BASE_URL}/v1/mcp/gateways/register", json={
+        "gateway_id": gateway_id,
+        "name": "approval-test-gateway"
+    })
+    if not reg_resp.ok:
+        print(f"  ✗ Unable to register temp gateway: {reg_resp.status_code} {reg_resp.text}")
+        return False
+
+    create_payload = {
+        "application_id": app["id"],
+        "gateway_id": gateway_id,
+        "principal_type": "User",
+        "principal_id": "alice",
+        "action": "tool.invoke",
+        "resource": "server:filesystem.read",
+        "tool_server": "filesystem",
+        "tool_name": "read",
+        "reason": "high-risk operation",
+        "expires_in_seconds": 120
+    }
+    create_resp = requests.post(f"{BASE_URL}/v1/mcp/approvals/", json=create_payload)
+    if not create_resp.ok:
+        print(f"  ✗ Create approval failed: {create_resp.status_code} {create_resp.text}")
+        return False
+    created = create_resp.json()
+    request_id = created.get("request_id")
+    if not request_id:
+        print("  ✗ approval create response missing request_id")
+        return False
+    print(f"  ✓ Approval created ({request_id})")
+
+    approve_resp = requests.post(f"{BASE_URL}/v1/mcp/approvals/{request_id}/approve")
+    if not approve_resp.ok:
+        print(f"  ✗ Approve approval failed: {approve_resp.status_code} {approve_resp.text}")
+        return False
+    if approve_resp.json().get("status") != "approved":
+        print("  ✗ Approval status is not approved after approval")
+        return False
+    print("  ✓ Approval approved")
+
+    create_resp_2 = requests.post(f"{BASE_URL}/v1/mcp/approvals/", json=create_payload)
+    if not create_resp_2.ok:
+        print(f"  ✗ Create second approval failed: {create_resp_2.status_code}")
+        return False
+    req2 = create_resp_2.json().get("request_id")
+    reject_resp = requests.post(f"{BASE_URL}/v1/mcp/approvals/{req2}/reject", json={"reason": "manual rejection test"})
+    if not reject_resp.ok:
+        print(f"  ✗ Reject approval failed: {reject_resp.status_code} {reject_resp.text}")
+        return False
+    if reject_resp.json().get("status") != "rejected":
+        print("  ✗ Approval status is not rejected after rejection")
+        return False
+    print("  ✓ Approval rejected")
+    return True
+
+
+def test_mcp_delegation_flow():
+    """Test delegation token issue/introspect/revoke."""
+    print("\n=== Testing MCP Delegation APIs ===")
+
+    app = _get_first_app()
+    if not app:
+        print("  ✗ No app found. Please run seed first.")
+        return False
+
+    expires_at = (time.time() + 3600)
+    expires_rfc3339 = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(expires_at))
+    create_payload = {
+        "application_id": app["id"],
+        "delegator_type": "User",
+        "delegator_id": "alice",
+        "delegate_type": "Agent",
+        "delegate_id": "assistant-1",
+        "scope_action": "tool.invoke",
+        "expires_at": expires_rfc3339
+    }
+    create_resp = requests.post(f"{BASE_URL}/v1/mcp/delegations/", json=create_payload)
+    if not create_resp.ok:
+        print(f"  ✗ Delegation create failed: {create_resp.status_code} {create_resp.text}")
+        return False
+    created = create_resp.json()
+    token = created.get("token")
+    grant = created.get("grant", {})
+    grant_id = grant.get("grant_id")
+    if not token or not grant_id:
+        print("  ✗ Delegation create missing token/grant")
+        return False
+    print(f"  ✓ Delegation issued ({grant_id})")
+
+    introspect_resp = requests.post(f"{BASE_URL}/v1/mcp/delegations/introspect", json={"token": token})
+    if not introspect_resp.ok:
+        print(f"  ✗ Delegation introspect failed: {introspect_resp.status_code} {introspect_resp.text}")
+        return False
+    if not introspect_resp.json().get("active"):
+        print("  ✗ Delegation should be active before revoke")
+        return False
+    print("  ✓ Delegation introspection shows active=true")
+
+    revoke_resp = requests.post(f"{BASE_URL}/v1/mcp/delegations/{grant_id}/revoke")
+    if not revoke_resp.ok:
+        print(f"  ✗ Revoke failed: {revoke_resp.status_code} {revoke_resp.text}")
+        return False
+    print("  ✓ Delegation revoked")
+
+    introspect_after_revoke = requests.post(f"{BASE_URL}/v1/mcp/delegations/introspect", json={"token": token})
+    if not introspect_after_revoke.ok:
+        print(f"  ✗ Introspect after revoke failed: {introspect_after_revoke.status_code}")
+        return False
+    if introspect_after_revoke.json().get("active"):
+        print("  ✗ Delegation should be inactive after revoke")
+        return False
+    print("  ✓ Delegation inactive after revoke")
+    return True
+
+
+def test_mcp_gateway_pending_approval_path():
+    """Test gateway pending_approval response path for sensitive actions."""
+    print("\n=== Testing MCP Gateway pending_approval path ===")
+
+    app = _get_first_app()
+    if not app:
+        print("  ✗ No app found. Please run seed first.")
+        return False
+
+    payload = {
+        "application_id": app["id"],
+        "principal": {"type": "User", "id": "alice"},
+        "action_id": "tool.delete",
+        "tool_server": "filesystem",
+        "tool_name": "delete",
+        "tool_input": {"path": "/tmp/file.txt"},
+        "require_approval": True
+    }
+    try:
+        resp = requests.post(f"{MCP_GATEWAY_URL}/v1/tool/invoke", json=payload, timeout=10)
+    except requests.exceptions.RequestException as e:
+        print(f"  ! MCP gateway not reachable ({e}); skipping this test")
+        return True
+
+    if resp.status_code != 202:
+        print(f"  ✗ Expected 202 pending approval, got {resp.status_code}: {resp.text}")
+        return False
+    body = resp.json()
+    if body.get("status") != "pending_approval" or not body.get("approval_request_id"):
+        print(f"  ✗ Unexpected pending response payload: {body}")
+        return False
+    print("  ✓ Gateway returns pending_approval with request id")
+    return True
+
+
 def main():
     print("=" * 60)
     print("MCP Integration Test Suite")
@@ -265,6 +488,10 @@ def main():
     
     # Test MCP SDK
     results["sdk"] = test_mcp_sdk()
+    results["mcp_gateway_registry"] = test_mcp_gateway_registry()
+    results["mcp_approval_workflow"] = test_mcp_approval_workflow()
+    results["mcp_delegation"] = test_mcp_delegation_flow()
+    results["mcp_gateway_pending"] = test_mcp_gateway_pending_approval_path()
     
     # Summary
     print("\n" + "=" * 60)

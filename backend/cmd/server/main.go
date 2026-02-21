@@ -74,6 +74,9 @@ func main() {
 	backendAuthRepo := storage.NewBackendAuthRepo(db.Writer())
 	backendInstanceRepo := storage.NewBackendInstanceRepo(db.Writer())
 	backendInstanceRepo.SetAuthRepo(backendAuthRepo) // For auto-approval when approval_required is false
+	mcpGatewayRepo := storage.NewMCPGatewayRepo(db.Writer())
+	mcpApprovalRepo := storage.NewMCPApprovalRepo(db.Writer())
+	mcpDelegationRepo := storage.NewMCPDelegationRepo(db.Writer())
 
 	var cache *storage.Cache
 	redisClient := storage.NewRedis(cfg.RedisAddr, cfg.RedisPass)
@@ -121,7 +124,7 @@ func main() {
 		}
 	}()
 
-	r := httpserver.NewRouter(cfg, authzSvc, appRepo, appAPIKeyRepo, policyRepo, entityRepo, schemaRepo, auditRepo, namespaceRepo, settingsRepo, backendAuthRepo, backendInstanceRepo, cache, cache, db, instanceRegistry, simSvc, redisClient)
+	r := httpserver.NewRouter(cfg, authzSvc, appRepo, appAPIKeyRepo, policyRepo, entityRepo, schemaRepo, auditRepo, namespaceRepo, settingsRepo, backendAuthRepo, backendInstanceRepo, mcpGatewayRepo, mcpApprovalRepo, mcpDelegationRepo, cache, cache, db, instanceRegistry, simSvc, redisClient)
 
 	// Start instance registry heartbeat (after router sets the status function)
 	if instanceRegistry != nil {

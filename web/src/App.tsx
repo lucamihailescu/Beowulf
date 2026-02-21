@@ -23,6 +23,8 @@ import Audit from "./pages/Audit";
 import Admin from "./pages/Admin";
 import Settings from "./pages/Settings";
 import ClusterManagement from "./pages/ClusterManagement";
+import MCPGatewayManagement from "./pages/MCPGatewayManagement";
+import MCPApprovalManagement from "./pages/MCPApprovalManagement";
 import { AuthProvider, useAuth, isAuthEnabled } from "./auth";
 import { useTheme } from "./ThemeProvider";
 import { SSEProvider } from "./contexts/SSEContext";
@@ -156,6 +158,8 @@ function AppShell() {
       { key: "/policies", icon: <FileTextOutlined />, label: "Policies" },
       { key: "/audit", icon: <AuditOutlined />, label: "Audit" },
       { key: "/cluster", icon: <CloudServerOutlined />, label: "Cluster" },
+      { key: "/mcp-gateways", icon: <CloudServerOutlined />, label: "MCP Gateways" },
+      { key: "/mcp-approvals", icon: <AuditOutlined />, label: "MCP Approvals" },
       { key: "/admin", icon: <SettingOutlined />, label: "Admin" },
       { type: "divider" as const },
       { key: "/settings", icon: <SettingOutlined />, label: "Settings" },
@@ -252,6 +256,8 @@ function AppShell() {
               <Route path="/policies" element={<Policies />} />
               <Route path="/audit" element={<Audit />} />
               <Route path="/cluster" element={<ClusterManagement />} />
+              <Route path="/mcp-gateways" element={<MCPGatewayManagement />} />
+              <Route path="/mcp-approvals" element={<MCPApprovalManagement />} />
               <Route path="/admin" element={<Admin />} />
               <Route path="/settings" element={<Settings />} />
             </Routes>

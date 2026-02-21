@@ -81,6 +81,27 @@ services:
       redis:
         condition: service_healthy
 
+  mcp-gateway:
+    build:
+      context: ./mcp-gateway
+      dockerfile: Dockerfile
+    environment:
+      APP_PORT: ${MCP_GATEWAY_PORT:-8090}
+      MCP_GATEWAY_ENABLED: ${MCP_GATEWAY_ENABLED:-true}
+      CEDAR_BACKEND_URL: ${MCP_GATEWAY_BACKEND_URL:-http://backend:8080}
+      CEDAR_APP_ID: ${MCP_GATEWAY_APP_ID:-1}
+      MCP_GATEWAY_NAME: ${MCP_GATEWAY_NAME:-cedar-mcp-gateway}
+      MCP_GATEWAY_ENDPOINT: ${MCP_GATEWAY_ENDPOINT:-http://mcp-gateway:8090}
+      MCP_GATEWAY_AUTH_MODE: ${MCP_GATEWAY_AUTH_MODE:-none}
+      MCP_GATEWAY_REGISTER_INTERVAL: ${MCP_GATEWAY_REGISTER_INTERVAL:-10s}
+      MCP_GATEWAY_APPROVAL_ACTIONS: ${MCP_GATEWAY_APPROVAL_ACTIONS:-tool.admin,tool.delete}
+      MCP_SERVER_ALLOWLIST: ${MCP_SERVER_ALLOWLIST:-}
+      MCP_GATEWAY_APPROVAL_TTL_SECONDS: ${MCP_GATEWAY_APPROVAL_TTL_SECONDS:-300}
+    ports:
+      - "${MCP_GATEWAY_PORT:-8090}:8090"
+    depends_on:
+      - backend
+
   migrate:
     build:
       context: ./backend

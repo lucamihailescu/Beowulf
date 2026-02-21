@@ -197,6 +197,9 @@ type API struct {
 	settings            *storage.SettingsRepo
 	backendAuthRepo     *storage.BackendAuthRepo
 	backendInstanceRepo *storage.BackendInstanceRepo
+	mcpGatewayRepo      *storage.MCPGatewayRepo
+	mcpApprovalRepo     *storage.MCPApprovalRepo
+	mcpDelegationRepo   *storage.MCPDelegationRepo
 	cache               CacheInvalidator
 	cacheStore          *storage.Cache // For health checks
 	sseBroker           *SSEBroker
@@ -233,7 +236,7 @@ type DBPinger interface {
 // @securityDefinitions.apikey BearerAuth
 // @in header
 // @name Authorization
-func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.ApplicationRepo, appAPIKeys *storage.ApplicationAPIKeyRepo, policies *storage.PolicyRepo, entities *storage.EntityRepo, schemas *storage.SchemaRepo, audits *storage.AuditRepo, namespaces *storage.NamespaceRepo, settings *storage.SettingsRepo, backendAuthRepo *storage.BackendAuthRepo, backendInstanceRepo *storage.BackendInstanceRepo, cache CacheInvalidator, cacheStore *storage.Cache, db DBPinger, instanceRegistry *storage.InstanceRegistry, simulationSvc *simulation.Service, redisClient *redis.Client) http.Handler {
+func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.ApplicationRepo, appAPIKeys *storage.ApplicationAPIKeyRepo, policies *storage.PolicyRepo, entities *storage.EntityRepo, schemas *storage.SchemaRepo, audits *storage.AuditRepo, namespaces *storage.NamespaceRepo, settings *storage.SettingsRepo, backendAuthRepo *storage.BackendAuthRepo, backendInstanceRepo *storage.BackendInstanceRepo, mcpGatewayRepo *storage.MCPGatewayRepo, mcpApprovalRepo *storage.MCPApprovalRepo, mcpDelegationRepo *storage.MCPDelegationRepo, cache CacheInvalidator, cacheStore *storage.Cache, db DBPinger, instanceRegistry *storage.InstanceRegistry, simulationSvc *simulation.Service, redisClient *redis.Client) http.Handler {
 	// Create SSE broker for real-time event streaming
 	sseBroker := NewSSEBroker()
 
@@ -285,6 +288,9 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 		settings:            settings,
 		backendAuthRepo:     backendAuthRepo,
 		backendInstanceRepo: backendInstanceRepo,
+		mcpGatewayRepo:      mcpGatewayRepo,
+		mcpApprovalRepo:     mcpApprovalRepo,
+		mcpDelegationRepo:   mcpDelegationRepo,
 		cache:               cache,
 		cacheStore:          cacheStore,
 		sseBroker:           sseBroker,
@@ -428,6 +434,34 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 		r.Post("/{instanceId}/unsuspend", api.handleUnsuspendBackendInstance)
 		r.Delete("/{instanceId}", api.handleDeleteBackendInstance)
 	})
+
+	// MCP gateway registry/approval/delegation control plane APIs
+	r.Route("/v1/mcp/gateways", func(r chi.Router) {
+		r.Post("/register", api.handleRegisterMCPGateway)
+		r.Get("/", api.handleListMCPGateways)
+		r.Get("/{gatewayId}", api.handleGetMCPGateway)
+		r.Post("/{gatewayId}/approve", api.handleApproveMCPGateway)
+		r.Post("/{gatewayId}/reject", api.handleRejectMCPGateway)
+		r.Post("/{gatewayId}/suspend", api.handleSuspendMCPGateway)
+		r.Post("/{gatewayId}/unsuspend", api.handleUnsuspendMCPGateway)
+		r.Delete("/{gatewayId}", api.handleDeleteMCPGateway)
+	})
+	r.Route("/v1/mcp/approvals", func(r chi.Router) {
+		r.Post("/", api.handleCreateMCPApprovalRequest)
+		r.Get("/", api.handleListMCPApprovalRequests)
+		r.Get("/{requestId}", api.handleGetMCPApprovalRequest)
+		r.Post("/{requestId}/approve", api.handleApproveMCPApprovalRequest)
+		r.Post("/{requestId}/reject", api.handleRejectMCPApprovalRequest)
+		r.Post("/{requestId}/expire", api.handleExpireMCPApprovalRequest)
+	})
+	r.Route("/v1/mcp/delegations", func(r chi.Router) {
+		r.Post("/", api.handleCreateMCPDelegation)
+		r.Get("/", api.handleListMCPDelegations)
+		r.Get("/{grantId}", api.handleGetMCPDelegation)
+		r.Post("/{grantId}/revoke", api.handleRevokeMCPDelegation)
+		r.Post("/introspect", api.handleIntrospectMCPDelegation)
+	})
+	r.Post("/v1/mcp/audit", api.handleMCPGatewayAudit)
 
 	// Update approval_required setting
 	r.Put("/v1/settings/backend-auth/approval", api.handleUpdateApprovalRequired)

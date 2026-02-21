@@ -504,6 +504,136 @@ export type BackendInstanceRejectRequest = {
   reason?: string;
 };
 
+// MCP Gateway types
+export type MCPGatewayStatus = "pending" | "approved" | "rejected" | "suspended";
+
+export type MCPGateway = {
+  id: number;
+  gateway_id: string;
+  name: string;
+  endpoint?: string;
+  status: MCPGatewayStatus;
+  auth_mode: string;
+  requested_at: string;
+  approved_at?: string;
+  approved_by?: string;
+  rejected_at?: string;
+  rejected_by?: string;
+  rejection_reason?: string;
+  last_heartbeat?: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MCPGatewayRegisterRequest = {
+  gateway_id: string;
+  name: string;
+  endpoint?: string;
+  auth_mode?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type MCPGatewayListResponse = {
+  items: MCPGateway[];
+  total: number;
+  counts: Record<string, number>;
+};
+
+export type MCPApprovalStatus = "pending" | "approved" | "rejected" | "expired";
+
+export type MCPApprovalRequest = {
+  id: number;
+  request_id: string;
+  application_id?: number;
+  gateway_id: string;
+  principal_type: string;
+  principal_id: string;
+  action: string;
+  resource: string;
+  tool_server: string;
+  tool_name: string;
+  status: MCPApprovalStatus;
+  requested_by?: string;
+  reason?: string;
+  decision_context?: Record<string, unknown>;
+  expires_at?: string;
+  approved_at?: string;
+  approved_by?: string;
+  rejected_at?: string;
+  rejected_by?: string;
+  rejection_reason?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MCPApprovalCreateRequest = {
+  request_id?: string;
+  application_id?: number;
+  gateway_id: string;
+  principal_type: string;
+  principal_id: string;
+  action: string;
+  resource: string;
+  tool_server: string;
+  tool_name: string;
+  requested_by?: string;
+  reason?: string;
+  decision_context?: Record<string, unknown>;
+  expires_in_seconds?: number;
+};
+
+export type MCPApprovalListResponse = {
+  items: MCPApprovalRequest[];
+  total: number;
+};
+
+export type MCPDelegationStatus = "active" | "revoked" | "expired";
+
+export type MCPDelegationGrant = {
+  id: number;
+  grant_id: string;
+  application_id: number;
+  gateway_id?: string;
+  delegator_type: string;
+  delegator_id: string;
+  delegate_type: string;
+  delegate_id: string;
+  scope_action: string;
+  scope_resource_prefix?: string;
+  status: MCPDelegationStatus;
+  issued_at: string;
+  expires_at: string;
+  revoked_at?: string;
+  revoked_by?: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MCPDelegationCreateRequest = {
+  application_id: number;
+  gateway_id?: string;
+  delegator_type: string;
+  delegator_id: string;
+  delegate_type: string;
+  delegate_id: string;
+  scope_action?: string;
+  scope_resource_prefix?: string;
+  expires_at: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type MCPDelegationIssueResponse = {
+  grant: MCPDelegationGrant;
+  token: string;
+};
+
+export type MCPDelegationListResponse = {
+  items: MCPDelegationGrant[];
+  total: number;
+};
+
 export type ObservabilityConfig = {
   enabled: boolean;
   endpoint: string;
@@ -1054,6 +1184,150 @@ export const api = {
     delete(instanceId: string): Promise<{ status: string }> {
       return request<{ status: string }>(`/v1/cluster/backends/${encodeURIComponent(instanceId)}`, {
         method: "DELETE",
+      });
+    },
+  },
+
+  // MCP gateway registry
+  mcpGateways: {
+    register(payload: MCPGatewayRegisterRequest): Promise<MCPGateway> {
+      return request<MCPGateway>("/v1/mcp/gateways/register", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+    },
+
+    list(status?: MCPGatewayStatus): Promise<MCPGatewayListResponse> {
+      const params = new URLSearchParams();
+      if (status) params.set("status", status);
+      const qs = params.toString();
+      return request<MCPGatewayListResponse>(`/v1/mcp/gateways/${qs ? `?${qs}` : ""}`);
+    },
+
+    get(gatewayId: string): Promise<MCPGateway> {
+      return request<MCPGateway>(`/v1/mcp/gateways/${encodeURIComponent(gatewayId)}`);
+    },
+
+    approve(gatewayId: string): Promise<MCPGateway> {
+      return request<MCPGateway>(`/v1/mcp/gateways/${encodeURIComponent(gatewayId)}/approve`, {
+        method: "POST",
+      });
+    },
+
+    reject(gatewayId: string, reason?: string): Promise<MCPGateway> {
+      return request<MCPGateway>(`/v1/mcp/gateways/${encodeURIComponent(gatewayId)}/reject`, {
+        method: "POST",
+        body: JSON.stringify({ reason }),
+      });
+    },
+
+    suspend(gatewayId: string): Promise<MCPGateway> {
+      return request<MCPGateway>(`/v1/mcp/gateways/${encodeURIComponent(gatewayId)}/suspend`, {
+        method: "POST",
+      });
+    },
+
+    unsuspend(gatewayId: string): Promise<MCPGateway> {
+      return request<MCPGateway>(`/v1/mcp/gateways/${encodeURIComponent(gatewayId)}/unsuspend`, {
+        method: "POST",
+      });
+    },
+
+    delete(gatewayId: string): Promise<{ status: string }> {
+      return request<{ status: string }>(`/v1/mcp/gateways/${encodeURIComponent(gatewayId)}`, {
+        method: "DELETE",
+      });
+    },
+  },
+
+  // MCP approval queue
+  mcpApprovals: {
+    create(payload: MCPApprovalCreateRequest): Promise<MCPApprovalRequest> {
+      return request<MCPApprovalRequest>("/v1/mcp/approvals/", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+    },
+
+    list(params?: {
+      status?: MCPApprovalStatus;
+      application_id?: number;
+      gateway_id?: string;
+      limit?: number;
+      offset?: number;
+    }): Promise<MCPApprovalListResponse> {
+      const qsParams = new URLSearchParams();
+      if (params?.status) qsParams.set("status", params.status);
+      if (params?.application_id !== undefined) qsParams.set("application_id", String(params.application_id));
+      if (params?.gateway_id) qsParams.set("gateway_id", params.gateway_id);
+      if (params?.limit) qsParams.set("limit", String(params.limit));
+      if (params?.offset) qsParams.set("offset", String(params.offset));
+      const qs = qsParams.toString();
+      return request<MCPApprovalListResponse>(`/v1/mcp/approvals/${qs ? `?${qs}` : ""}`);
+    },
+
+    get(requestId: string): Promise<MCPApprovalRequest> {
+      return request<MCPApprovalRequest>(`/v1/mcp/approvals/${encodeURIComponent(requestId)}`);
+    },
+
+    approve(requestId: string): Promise<MCPApprovalRequest> {
+      return request<MCPApprovalRequest>(`/v1/mcp/approvals/${encodeURIComponent(requestId)}/approve`, {
+        method: "POST",
+      });
+    },
+
+    reject(requestId: string, reason?: string): Promise<MCPApprovalRequest> {
+      return request<MCPApprovalRequest>(`/v1/mcp/approvals/${encodeURIComponent(requestId)}/reject`, {
+        method: "POST",
+        body: JSON.stringify({ reason }),
+      });
+    },
+
+    expire(requestId: string): Promise<MCPApprovalRequest> {
+      return request<MCPApprovalRequest>(`/v1/mcp/approvals/${encodeURIComponent(requestId)}/expire`, {
+        method: "POST",
+      });
+    },
+  },
+
+  // MCP delegations
+  mcpDelegations: {
+    create(payload: MCPDelegationCreateRequest): Promise<MCPDelegationIssueResponse> {
+      return request<MCPDelegationIssueResponse>("/v1/mcp/delegations/", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+    },
+
+    list(params?: {
+      application_id?: number;
+      status?: MCPDelegationStatus;
+      limit?: number;
+      offset?: number;
+    }): Promise<MCPDelegationListResponse> {
+      const qsParams = new URLSearchParams();
+      if (params?.application_id !== undefined) qsParams.set("application_id", String(params.application_id));
+      if (params?.status) qsParams.set("status", params.status);
+      if (params?.limit) qsParams.set("limit", String(params.limit));
+      if (params?.offset) qsParams.set("offset", String(params.offset));
+      const qs = qsParams.toString();
+      return request<MCPDelegationListResponse>(`/v1/mcp/delegations/${qs ? `?${qs}` : ""}`);
+    },
+
+    get(grantId: string): Promise<MCPDelegationGrant> {
+      return request<MCPDelegationGrant>(`/v1/mcp/delegations/${encodeURIComponent(grantId)}`);
+    },
+
+    revoke(grantId: string): Promise<MCPDelegationGrant> {
+      return request<MCPDelegationGrant>(`/v1/mcp/delegations/${encodeURIComponent(grantId)}/revoke`, {
+        method: "POST",
+      });
+    },
+
+    introspect(token: string): Promise<{ active: boolean; grant?: MCPDelegationGrant }> {
+      return request<{ active: boolean; grant?: MCPDelegationGrant }>("/v1/mcp/delegations/introspect", {
+        method: "POST",
+        body: JSON.stringify({ token }),
       });
     },
   },

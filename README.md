@@ -127,6 +127,15 @@ A full-stack implementation for managing [Cedar](https://github.com/cedar-policy
 | `RATE_LIMIT_WINDOW` | `1m` | Time window for rate limiting (e.g., `1m`, `30s`) |
 | `VITE_API_BASE_URL` | `http://localhost:8080` | Backend API URL for frontend |
 
+MCP gateway service environment variables (Docker Compose):
+
+- `MCP_GATEWAY_PORT` (default `8090`)
+- `MCP_GATEWAY_ENABLED` (default `true`)
+- `MCP_GATEWAY_BACKEND_URL` (default `http://backend:8080`)
+- `MCP_GATEWAY_APP_ID` (default `1`)
+- `MCP_GATEWAY_APPROVAL_ACTIONS` (comma-separated action IDs requiring HITL)
+- `MCP_SERVER_ALLOWLIST` (comma-separated downstream URL prefixes)
+
 ## API Reference
 
 ### gRPC API
@@ -482,6 +491,97 @@ forbid (
 ## MCP Server Integration
 
 This solution can be used as an authorization backend for **Model Context Protocol (MCP)** servers. MCP servers can authenticate using per-application runtime API keys.
+
+### MCP Gateway Service (New)
+
+A standalone `mcp-gateway` service is now included and can be started with Docker Compose. The gateway:
+
+- intercepts MCP tool invocation requests,
+- evaluates authorization via `POST /v1/authorize`,
+- supports pending-approval workflows for sensitive actions,
+- supports delegation/OBO token introspection,
+- records structured MCP audit events via backend API.
+
+Default gateway endpoint: `http://localhost:8090`
+
+Core API surface:
+
+- `POST /v1/mcp/gateways/register`
+- `GET /v1/mcp/gateways/`
+- `POST /v1/mcp/approvals/`
+- `GET /v1/mcp/approvals/{requestId}`
+- `POST /v1/mcp/delegations/`
+- `POST /v1/mcp/delegations/introspect`
+
+### MCP Cedar Model Conventions
+
+Use these canonical entities/actions when writing MCP authorization policies:
+
+- Principal: end-user or delegated user/agent subject
+- Action type: `MCP::Action`
+- Resource type: `MCP::Tool`
+- Common action id: `tool.invoke`
+- Common resource id format: `<server>:<tool>`
+
+Example schema fragment:
+
+```json
+{
+  "MCP": {
+    "entityTypes": {
+      "Gateway": { "shape": { "type": "Record", "attributes": {} } },
+      "Server": { "shape": { "type": "Record", "attributes": {} } },
+      "Tool": { "shape": { "type": "Record", "attributes": {} } },
+      "Action": { "shape": { "type": "Record", "attributes": {} } }
+    },
+    "actions": {
+      "tool.invoke": {
+        "appliesTo": {
+          "principalTypes": ["User", "Agent"],
+          "resourceTypes": ["MCP::Tool"]
+        }
+      }
+    }
+  }
+}
+```
+
+### MCP Cedar Policy Examples
+
+Standard invoke allow:
+
+```cedar
+permit (
+  principal == User::"alice",
+  action == MCP::Action::"tool.invoke",
+  resource == MCP::Tool::"filesystem:read"
+);
+```
+
+Sensitive action requires approval context:
+
+```cedar
+permit (
+  principal,
+  action == MCP::Action::"tool.delete",
+  resource
+) when {
+  context.approval_status == "approved"
+};
+```
+
+Delegated/OBO constrained invocation:
+
+```cedar
+permit (
+  principal == User::"alice",
+  action == MCP::Action::"tool.invoke",
+  resource == MCP::Tool::"email:send"
+) when {
+  context.delegation_grant_id != "" &&
+  context.delegated_actor == "Agent::assistant-1"
+};
+```
 
 ### Architecture
 

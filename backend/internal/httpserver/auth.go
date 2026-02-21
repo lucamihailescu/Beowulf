@@ -211,6 +211,7 @@ func (am *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 		// Skip auth for cluster management, SSE, settings, auth config, and identity provider endpoints
 		// These are needed for: load-balancer, backend registration, dashboard, and initial setup
 		if strings.HasPrefix(path, "/v1/cluster/") ||
+			strings.HasPrefix(path, "/v1/mcp/") ||
 			strings.HasPrefix(path, "/v1/settings/") ||
 			strings.HasPrefix(path, "/v1/auth/") ||
 			path == "/v1/events" ||
