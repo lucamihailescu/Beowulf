@@ -736,6 +736,8 @@ let tokenGetter: (() => Promise<string | null>) | null = null;
 
 // Callback for authentication failures
 let onAuthError: (() => void) | null = null;
+let lastAuthErrorNotifiedAt = 0;
+const AUTH_ERROR_NOTIFY_COOLDOWN_MS = 10000;
 
 /**
  * Configure the API client with authentication functions.
@@ -747,6 +749,20 @@ export function configureAuth(options: {
 }) {
   tokenGetter = options.getToken;
   onAuthError = options.onAuthError ?? null;
+}
+
+function notifyAuthErrorThrottled() {
+  if (!onAuthError) return;
+  const now = Date.now();
+  if (now - lastAuthErrorNotifiedAt < AUTH_ERROR_NOTIFY_COOLDOWN_MS) {
+    return;
+  }
+  lastAuthErrorNotifiedAt = now;
+  try {
+    onAuthError();
+  } catch (e) {
+    console.warn("Auth error callback failed:", e);
+  }
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -763,28 +779,43 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
   }
 
-  let res: Response;
-  try {
-    res = await fetch(`${API_BASE_URL}${path}`, {
-      credentials: 'include', // Include cookies for Kerberos/SPNEGO
-      headers: {
-        "Content-Type": "application/json",
-        ...authHeaders,
-        ...(init?.headers ?? {}),
-      },
-      ...init,
-    });
-  } catch (e) {
-    // Browser network error (often CORS or backend unreachable)
-    const msg = (e as Error)?.message || "Failed to fetch";
-    throw new Error(`${msg}. Check that the backend is reachable at ${API_BASE_URL} and that CORS is enabled.`);
+  const performFetch = async (headers: Record<string, string>) => {
+    try {
+      return await fetch(`${API_BASE_URL}${path}`, {
+        credentials: 'include', // Include cookies for Kerberos/SPNEGO
+        headers: {
+          "Content-Type": "application/json",
+          ...headers,
+          ...(init?.headers ?? {}),
+        },
+        ...init,
+      });
+    } catch (e) {
+      // Browser network error (often CORS or backend unreachable)
+      const msg = (e as Error)?.message || "Failed to fetch";
+      throw new Error(`${msg}. Check that the backend is reachable at ${API_BASE_URL} and that CORS is enabled.`);
+    }
+  };
+
+  let res = await performFetch(authHeaders);
+
+  // On 401, retry once with a fresh token fetch. This helps recover from
+  // transient token acquisition issues during startup or backend restarts.
+  if (res.status === 401 && tokenGetter) {
+    try {
+      const retryToken = await tokenGetter();
+      const retryHeaders: Record<string, string> = retryToken
+        ? { Authorization: `Bearer ${retryToken}` }
+        : authHeaders;
+      res = await performFetch(retryHeaders);
+    } catch (e) {
+      console.warn("Failed to retry request after 401:", e);
+    }
   }
 
-  // Handle authentication errors
-  // NOTE: We do NOT automatically trigger onAuthError here because it can cause redirect loops
-  // when MSAL is still processing the auth response. Instead, we just throw the error and
-  // let the UI handle it (show login button, error message, etc.)
+  // Handle authentication errors after retry
   if (res.status === 401) {
+    notifyAuthErrorThrottled();
     throw new Error('Authentication required. Please sign in.');
   }
 

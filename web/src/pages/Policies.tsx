@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { Alert, Button, Card, Checkbox, Col, Input, Modal, Popconfirm, Radio, Row, Select, Space, Steps, Table, Tabs, Tag, Tooltip, Typography, theme, message } from "antd";
-import { DeleteOutlined, FileTextOutlined, PlusOutlined, ThunderboltOutlined, EyeOutlined, AppstoreOutlined, ExperimentOutlined } from "@ant-design/icons";
+import { DeleteOutlined, EditOutlined, FileTextOutlined, PlusOutlined, ThunderboltOutlined, EyeOutlined, AppstoreOutlined, ExperimentOutlined } from "@ant-design/icons";
 import { api, type Application, type AuthorizeResponse, type CedarEntity, type PolicyDetails, type PolicySummary, type Schema, type SchemaMetadata } from "../api";
 import PolicyTemplateWizard from "../components/PolicyTemplateWizard";
 import PolicySimulator from "../components/PolicySimulator";
@@ -30,6 +30,252 @@ type ReusablePolicyTemplate = {
   createdAt: string;
 };
 
+type VisualPolicyRule = {
+  effect: "permit" | "forbid";
+  principal: string;
+  action: string;
+  resource: string;
+  conditions: string[];
+  unsupportedReasons: string[];
+  statementStart: number;
+  statementEnd: number;
+};
+
+type VisualPolicySummary = {
+  rules: VisualPolicyRule[];
+  warnings: string[];
+};
+
+type VisualPolicyMatrixRow = {
+  key: string;
+  principal: string;
+  resource: string;
+  cells: Record<string, VisualPolicyRule[]>;
+};
+
+function splitByTokenTopLevel(input: string, token: string): string[] {
+  const parts: string[] = [];
+  let buffer = "";
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let escapeNext = false;
+  let parenDepth = 0;
+  let braceDepth = 0;
+  let bracketDepth = 0;
+
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i];
+
+    if (escapeNext) {
+      buffer += ch;
+      escapeNext = false;
+      continue;
+    }
+
+    if ((inSingleQuote || inDoubleQuote) && ch === "\\") {
+      buffer += ch;
+      escapeNext = true;
+      continue;
+    }
+
+    if (!inDoubleQuote && ch === "'") {
+      inSingleQuote = !inSingleQuote;
+      buffer += ch;
+      continue;
+    }
+
+    if (!inSingleQuote && ch === '"') {
+      inDoubleQuote = !inDoubleQuote;
+      buffer += ch;
+      continue;
+    }
+
+    if (!inSingleQuote && !inDoubleQuote) {
+      if (ch === "(") parenDepth += 1;
+      if (ch === ")") parenDepth = Math.max(0, parenDepth - 1);
+      if (ch === "{") braceDepth += 1;
+      if (ch === "}") braceDepth = Math.max(0, braceDepth - 1);
+      if (ch === "[") bracketDepth += 1;
+      if (ch === "]") bracketDepth = Math.max(0, bracketDepth - 1);
+
+      const atTopLevel = parenDepth === 0 && braceDepth === 0 && bracketDepth === 0;
+      if (atTopLevel && input.startsWith(token, i)) {
+        parts.push(buffer.trim());
+        buffer = "";
+        i += token.length - 1;
+        continue;
+      }
+    }
+
+    buffer += ch;
+  }
+
+  if (buffer.trim()) {
+    parts.push(buffer.trim());
+  }
+
+  return parts;
+}
+
+function parseVisualPolicySummary(policyText: string): VisualPolicySummary {
+  const rules: VisualPolicyRule[] = [];
+  const warnings: string[] = [];
+  const sourceText = policyText || "";
+  const sanitized = sourceText.trim();
+
+  if (!sanitized) {
+    return { rules: [], warnings: ["Policy text is empty."] };
+  }
+
+  const statementPattern = /(permit|forbid)\s*\(([\s\S]*?)\)\s*(?:when\s*\{([\s\S]*?)\})?\s*;/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = statementPattern.exec(sanitized)) !== null) {
+    const effect = match[1].toLowerCase() as "permit" | "forbid";
+    const tupleBody = match[2] ?? "";
+    const whenBody = match[3] ?? "";
+
+    const clauses = splitByTokenTopLevel(tupleBody, ",");
+    const principalClause = clauses.find((clause) => /^principal\b/i.test(clause));
+    const actionClause = clauses.find((clause) => /^action\b/i.test(clause));
+    const resourceClause = clauses.find((clause) => /^resource\b/i.test(clause));
+
+    const unsupportedReasons: string[] = [];
+    if (!principalClause) unsupportedReasons.push("Could not map a principal clause.");
+    if (!actionClause) unsupportedReasons.push("Could not map an action clause.");
+    if (!resourceClause) unsupportedReasons.push("Could not map a resource clause.");
+    if (principalClause && !/^principal\s*(==|in)\s+/i.test(principalClause)) {
+      unsupportedReasons.push("Principal clause uses advanced syntax; shown as best-effort.");
+    }
+    if (actionClause && !/^action\s*(==|in)\s+/i.test(actionClause)) {
+      unsupportedReasons.push("Action clause uses advanced syntax; shown as best-effort.");
+    }
+    if (resourceClause && !/^resource\s*(==|in)\s+/i.test(resourceClause)) {
+      unsupportedReasons.push("Resource clause uses advanced syntax; shown as best-effort.");
+    }
+
+    const principal = principalClause ? principalClause.replace(/^principal\s*/i, "").trim() : "—";
+    const action = actionClause ? actionClause.replace(/^action\s*/i, "").trim() : "—";
+    const resource = resourceClause ? resourceClause.replace(/^resource\s*/i, "").trim() : "—";
+    const conditions = whenBody ? splitByTokenTopLevel(whenBody, "&&").map((item) => item.trim()).filter(Boolean) : [];
+
+    rules.push({
+      effect,
+      principal,
+      action,
+      resource,
+      conditions,
+      unsupportedReasons,
+      statementStart: match.index,
+      statementEnd: match.index + match[0].length,
+    });
+  }
+
+  const declaredStatements = (sanitized.match(/\b(?:permit|forbid)\s*\(/gi) || []).length;
+  if (declaredStatements > rules.length) {
+    warnings.push(
+      "Some Cedar statements could not be fully mapped to the visual format. Use Policy Text as the source of truth."
+    );
+  }
+  if (rules.length === 0 && declaredStatements === 0) {
+    warnings.push("No `permit`/`forbid` Cedar statements were detected.");
+  }
+
+  return { rules, warnings };
+}
+
+function toMatrixDisplayValue(rawClause: string): string {
+  const trimmed = (rawClause || "").trim();
+  if (!trimmed) return "—";
+
+  // Principal/action/resource are stored as `== ...` / `in ...` clause bodies.
+  const withoutOperator = trimmed.replace(/^(==|in)\s+/i, "").trim();
+  if (!withoutOperator) return "—";
+
+  // Cedar UID literal: Type::"id" -> id
+  const cedarQuoted = withoutOperator.match(/^.+::"((?:\\.|[^"\\])*)"$/);
+  if (cedarQuoted) {
+    return cedarQuoted[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+  }
+
+  // Plain quoted literal: "id" -> id
+  const quoted = withoutOperator.match(/^"((?:\\.|[^"\\])*)"$/);
+  if (quoted) {
+    return quoted[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+  }
+
+  // Cedar UID shorthand: Type::id -> id
+  const doubleColon = withoutOperator.lastIndexOf("::");
+  if (doubleColon > 0 && doubleColon < withoutOperator.length - 2) {
+    return withoutOperator.slice(doubleColon + 2).trim();
+  }
+
+  return withoutOperator;
+}
+
+function normalizeClauseForSubject(rawClause: string): string {
+  const trimmed = (rawClause || "").trim();
+  if (!trimmed) return '== ""';
+  if (/^(==|in)\s+/i.test(trimmed)) return trimmed;
+  return `== ${trimmed}`;
+}
+
+function replaceClauseDisplayValue(rawClause: string, newDisplayValue: string): string {
+  const trimmed = (rawClause || "").trim();
+  const input = (newDisplayValue || "").trim();
+  if (!input) return trimmed || '== ""';
+
+  const operatorMatch = trimmed.match(/^(==|in)\s+/i);
+  const operator = operatorMatch ? operatorMatch[1] : "==";
+  const originalValue = operatorMatch ? trimmed.slice(operatorMatch[0].length).trim() : trimmed;
+
+  if (input.includes("::") || /^".*"$/.test(input)) {
+    return `${operator} ${input}`;
+  }
+
+  const cedarQuoted = originalValue.match(/^(.+)::"((?:\\.|[^"\\])*)"$/);
+  if (cedarQuoted) {
+    const typePrefix = cedarQuoted[1].trim();
+    const escaped = input.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    return `${operator} ${typePrefix}::"${escaped}"`;
+  }
+
+  const quoted = originalValue.match(/^"((?:\\.|[^"\\])*)"$/);
+  if (quoted) {
+    const escaped = input.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    return `${operator} "${escaped}"`;
+  }
+
+  const cedarPlain = originalValue.match(/^(.+)::([^"].*)$/);
+  if (cedarPlain) {
+    const typePrefix = cedarPlain[1].trim();
+    return `${operator} ${typePrefix}::${input}`;
+  }
+
+  return `${operator} ${input}`;
+}
+
+function buildRuleStatement(rule: VisualPolicyRule): string {
+  const whenConditions = rule.conditions.map((item) => item.trim()).filter(Boolean);
+  const tuple = [
+    `  principal ${normalizeClauseForSubject(rule.principal)},`,
+    `  action ${normalizeClauseForSubject(rule.action)},`,
+    `  resource ${normalizeClauseForSubject(rule.resource)}`,
+  ].join("\n");
+  if (whenConditions.length === 0) {
+    return `${rule.effect} (\n${tuple}\n);`;
+  }
+  return `${rule.effect} (\n${tuple}\n) when {\n  ${whenConditions.join("\n  && ")}\n};`;
+}
+
+type InlineRuleDraft = {
+  principalValue: string;
+  actionValue: string;
+  resourceValue: string;
+  effect: "permit" | "forbid";
+  conditionsText: string;
+};
+
 export default function Policies() {
   const { token } = theme.useToken();
   const [apps, setApps] = useState<Application[]>([]);
@@ -51,6 +297,9 @@ export default function Policies() {
   const [editPolicyText, setEditPolicyText] = useState("");
   const [editActivate, setEditActivate] = useState(true);
   const [savingExisting, setSavingExisting] = useState(false);
+  const [policyModalView, setPolicyModalView] = useState<"visual" | "text">("visual");
+  const [editingRuleKey, setEditingRuleKey] = useState<string | null>(null);
+  const [inlineRuleDraft, setInlineRuleDraft] = useState<InlineRuleDraft | null>(null);
 
   const [entities, setEntities] = useState<CedarEntity[]>([]);
 
@@ -513,6 +762,7 @@ export default function Policies() {
       setEditDescription(item.description ?? "");
       setEditPolicyText(item.latest_policy_text ?? "");
       setEditActivate(true);
+      setPolicyModalView("visual");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -525,6 +775,9 @@ export default function Policies() {
     setSelectedPolicy(null);
     setPolicyModalLoading(false);
     setSavingExisting(false);
+    setPolicyModalView("visual");
+    setEditingRuleKey(null);
+    setInlineRuleDraft(null);
   }
 
   async function onApprovePolicy(policy: PolicySummary) {
@@ -730,6 +983,98 @@ export default function Policies() {
     if (!authzResult) return 4;
     return 5;
   }, [name, scopePrincipalType, scopePrincipalId, scopeActions, scopeResourceType, scopeResourceId, generatedPolicyText, authzResult]);
+
+  const visualPolicySummary = useMemo(
+    () => parseVisualPolicySummary(editPolicyText),
+    [editPolicyText]
+  );
+
+  const visualMatrix = useMemo(() => {
+    const actionOrder = Array.from(
+      new Set(
+        visualPolicySummary.rules
+          .map((rule) => rule.action.trim())
+          .filter((action) => action.length > 0)
+      )
+    );
+
+    const rowMap = new Map<string, VisualPolicyMatrixRow>();
+    for (const rule of visualPolicySummary.rules) {
+      const principal = rule.principal || "—";
+      const resource = rule.resource || "—";
+      const rowKey = `${principal}__${resource}`;
+      const actionKey = rule.action || "—";
+      let row = rowMap.get(rowKey);
+      if (!row) {
+        row = {
+          key: rowKey,
+          principal,
+          resource,
+          cells: {},
+        };
+        rowMap.set(rowKey, row);
+      }
+      if (!row.cells[actionKey]) {
+        row.cells[actionKey] = [];
+      }
+      row.cells[actionKey].push(rule);
+    }
+
+    const rows = Array.from(rowMap.values()).sort((a, b) => {
+      const principalCmp = a.principal.localeCompare(b.principal);
+      if (principalCmp !== 0) return principalCmp;
+      return a.resource.localeCompare(b.resource);
+    });
+
+    return { actions: actionOrder, rows };
+  }, [visualPolicySummary.rules]);
+
+  function openInlineRuleEditor(ruleKey: string, rule: VisualPolicyRule) {
+    setEditingRuleKey(ruleKey);
+    setInlineRuleDraft({
+      principalValue: toMatrixDisplayValue(rule.principal),
+      actionValue: toMatrixDisplayValue(rule.action),
+      resourceValue: toMatrixDisplayValue(rule.resource),
+      effect: rule.effect,
+      conditionsText: rule.conditions.join("\n"),
+    });
+  }
+
+  function cancelInlineRuleEditor() {
+    setEditingRuleKey(null);
+    setInlineRuleDraft(null);
+  }
+
+  function saveInlineRule(rule: VisualPolicyRule) {
+    if (!inlineRuleDraft) return;
+    if (rule.unsupportedReasons.length > 0) {
+      setError("This rule uses advanced Cedar syntax and cannot be safely edited inline. Use Policy Text instead.");
+      return;
+    }
+    if (rule.statementStart < 0 || rule.statementEnd <= rule.statementStart || rule.statementEnd > editPolicyText.length) {
+      setError("Inline update failed due to stale rule positions. Re-open the policy and try again.");
+      return;
+    }
+
+    const updatedRule: VisualPolicyRule = {
+      ...rule,
+      effect: inlineRuleDraft.effect,
+      principal: replaceClauseDisplayValue(rule.principal, inlineRuleDraft.principalValue),
+      action: replaceClauseDisplayValue(rule.action, inlineRuleDraft.actionValue),
+      resource: replaceClauseDisplayValue(rule.resource, inlineRuleDraft.resourceValue),
+      conditions: inlineRuleDraft.conditionsText
+        .split("\n")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    };
+
+    const replacement = buildRuleStatement(updatedRule);
+    const nextText = `${editPolicyText.slice(0, rule.statementStart)}${replacement}${editPolicyText.slice(rule.statementEnd)}`;
+    setEditPolicyText(nextText);
+    setNotice("Policy rule updated inline. Review Policy Text and save a new version.");
+    setEditingRuleKey(null);
+    setInlineRuleDraft(null);
+  }
 
   const tabItems = [
     {
@@ -1459,15 +1804,235 @@ export default function Policies() {
               <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>Description</Typography.Text>
               <Input value={editDescription} onChange={(e) => setEditDescription(e.target.value)} />
             </div>
-            <div>
-              <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>Policy Text</Typography.Text>
-              <Input.TextArea 
-                value={editPolicyText} 
-                onChange={(e) => setEditPolicyText(e.target.value)} 
-                rows={12}
-                style={{ fontFamily: "'Fira Code', 'Monaco', monospace", fontSize: 12 }}
-              />
-            </div>
+            <Tabs
+              activeKey={policyModalView}
+              onChange={(key) => setPolicyModalView(key as "visual" | "text")}
+              items={[
+                {
+                  key: "visual",
+                  label: "Visual",
+                  children: (
+                    <Space direction="vertical" size={12} style={{ width: "100%" }}>
+                      <Alert
+                        type="info"
+                        showIcon
+                        message="Visual policy summary (best effort)"
+                        description="This view is designed for common Cedar patterns. Complex expressions may be only partially represented. Policy Text remains the source of truth."
+                      />
+                      {visualPolicySummary.warnings.length > 0 && (
+                        <Alert
+                          type="warning"
+                          showIcon
+                          message="Parsing caveats"
+                          description={
+                            <ul style={{ margin: 0, paddingLeft: 20 }}>
+                              {visualPolicySummary.warnings.map((warning) => (
+                                <li key={warning}>{warning}</li>
+                              ))}
+                            </ul>
+                          }
+                        />
+                      )}
+                      {visualPolicySummary.rules.length === 0 ? (
+                        <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
+                          No visual rules available for this policy text.
+                        </Typography.Paragraph>
+                      ) : (
+                        <Space direction="vertical" size={10} style={{ width: "100%" }}>
+                          <Card
+                            size="small"
+                            title="Principal x Resource Matrix"
+                            extra={<Typography.Text type="secondary">{visualMatrix.rows.length} row(s)</Typography.Text>}
+                          >
+                            <Table<VisualPolicyMatrixRow>
+                              rowKey="key"
+                              pagination={false}
+                              size="small"
+                              dataSource={visualMatrix.rows}
+                              scroll={{ x: true }}
+                              columns={[
+                                {
+                                  title: "Principal",
+                                  dataIndex: "principal",
+                                  width: 220,
+                                  render: (value: string) => (
+                                    <Typography.Text code>{toMatrixDisplayValue(value)}</Typography.Text>
+                                  ),
+                                },
+                                {
+                                  title: "Resource",
+                                  dataIndex: "resource",
+                                  width: 220,
+                                  render: (value: string) => (
+                                    <Typography.Text code>{toMatrixDisplayValue(value)}</Typography.Text>
+                                  ),
+                                },
+                                {
+                                  title: "Action",
+                                  key: "action-summary",
+                                  width: 360,
+                                  render: (_: unknown, row: VisualPolicyMatrixRow) => {
+                                    const actionEntries = Object.entries(row.cells).sort(([a], [b]) =>
+                                      a.localeCompare(b)
+                                    );
+                                    if (actionEntries.length === 0) {
+                                      return <Typography.Text type="secondary">—</Typography.Text>;
+                                    }
+                                    return (
+                                      <Space wrap size={6}>
+                                        {actionEntries.flatMap(([action, rules]) =>
+                                          rules.map((rule, ruleIdx) => {
+                                            const ruleKey = `${row.key}-${action}-${ruleIdx}-${rule.statementStart}`;
+                                            const caveat = rule.unsupportedReasons.length > 0
+                                              ? `\nCaveat: ${rule.unsupportedReasons.join(" ")}`
+                                              : "";
+                                            const conditionHint = rule.conditions.length > 0
+                                              ? `\nConditions:\n${rule.conditions.join("\n")}`
+                                              : "";
+                                            const actionLabel = toMatrixDisplayValue(action);
+                                            return (
+                                              <Card
+                                                key={ruleKey}
+                                                size="small"
+                                                bodyStyle={{ padding: 8 }}
+                                                style={{ minWidth: 280 }}
+                                              >
+                                                <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                                                  <Space size={4} wrap>
+                                                    <Tooltip
+                                                      title={`${actionLabel}: ${rule.effect.toUpperCase()}${conditionHint}${caveat}`}
+                                                    >
+                                                      <Tag color={rule.effect === "permit" ? "green" : "red"}>
+                                                        {actionLabel}: {rule.effect.toUpperCase()}
+                                                        {rule.conditions.length > 0 ? ` (${rule.conditions.length} when)` : ""}
+                                                      </Tag>
+                                                    </Tooltip>
+                                                    {rule.unsupportedReasons.length === 0 ? (
+                                                      <Button
+                                                        size="small"
+                                                        type="text"
+                                                        icon={<EditOutlined />}
+                                                        onClick={() => openInlineRuleEditor(ruleKey, rule)}
+                                                        aria-label="Edit rule inline"
+                                                      />
+                                                    ) : (
+                                                      <Tooltip title="Complex rule: edit from Policy Text tab">
+                                                        <Button
+                                                          size="small"
+                                                          type="text"
+                                                          icon={<EditOutlined />}
+                                                          disabled
+                                                          aria-label="Inline edit unavailable"
+                                                        />
+                                                      </Tooltip>
+                                                    )}
+                                                  </Space>
+
+                                                  {editingRuleKey === ruleKey && inlineRuleDraft && (
+                                                    <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                                                      <Typography.Text strong style={{ fontSize: 12 }}>
+                                                        Edit Rule
+                                                      </Typography.Text>
+                                                      <Input
+                                                        size="small"
+                                                        value={inlineRuleDraft.principalValue}
+                                                        onChange={(e) =>
+                                                          setInlineRuleDraft((prev) =>
+                                                            prev ? { ...prev, principalValue: e.target.value } : prev
+                                                          )
+                                                        }
+                                                        placeholder="Principal value"
+                                                      />
+                                                      <Input
+                                                        size="small"
+                                                        value={inlineRuleDraft.actionValue}
+                                                        onChange={(e) =>
+                                                          setInlineRuleDraft((prev) =>
+                                                            prev ? { ...prev, actionValue: e.target.value } : prev
+                                                          )
+                                                        }
+                                                        placeholder="Action value"
+                                                      />
+                                                      <Input
+                                                        size="small"
+                                                        value={inlineRuleDraft.resourceValue}
+                                                        onChange={(e) =>
+                                                          setInlineRuleDraft((prev) =>
+                                                            prev ? { ...prev, resourceValue: e.target.value } : prev
+                                                          )
+                                                        }
+                                                        placeholder="Resource value"
+                                                      />
+                                                      <Radio.Group
+                                                        size="small"
+                                                        value={inlineRuleDraft.effect}
+                                                        onChange={(e) =>
+                                                          setInlineRuleDraft((prev) =>
+                                                            prev ? { ...prev, effect: e.target.value as "permit" | "forbid" } : prev
+                                                          )
+                                                        }
+                                                      >
+                                                        <Radio.Button value="permit">PERMIT</Radio.Button>
+                                                        <Radio.Button value="forbid">FORBID</Radio.Button>
+                                                      </Radio.Group>
+                                                      <Input.TextArea
+                                                        rows={3}
+                                                        size="small"
+                                                        value={inlineRuleDraft.conditionsText}
+                                                        onChange={(e) =>
+                                                          setInlineRuleDraft((prev) =>
+                                                            prev ? { ...prev, conditionsText: e.target.value } : prev
+                                                          )
+                                                        }
+                                                        placeholder="One condition per line (optional)"
+                                                      />
+                                                      <Space>
+                                                        <Button size="small" onClick={cancelInlineRuleEditor}>
+                                                          Cancel
+                                                        </Button>
+                                                        <Button size="small" type="primary" onClick={() => saveInlineRule(rule)}>
+                                                          Apply
+                                                        </Button>
+                                                      </Space>
+                                                    </Space>
+                                                  )}
+                                                </Space>
+                                              </Card>
+                                            );
+                                          })
+                                        )}
+                                      </Space>
+                                    );
+                                  },
+                                },
+                              ]}
+                            />
+                          </Card>
+                          <Typography.Text type="secondary">
+                            Action tags show `action: decision` for each principal-resource pair. Click the pencil icon to edit supported rules inline; use Policy Text for complex rules.
+                          </Typography.Text>
+                        </Space>
+                      )}
+                    </Space>
+                  ),
+                },
+                {
+                  key: "text",
+                  label: "Policy Text",
+                  children: (
+                    <div>
+                      <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>Policy Text</Typography.Text>
+                      <Input.TextArea
+                        value={editPolicyText}
+                        onChange={(e) => setEditPolicyText(e.target.value)}
+                        rows={12}
+                        style={{ fontFamily: "'Fira Code', 'Monaco', monospace", fontSize: 12 }}
+                      />
+                    </div>
+                  ),
+                },
+              ]}
+            />
             {selectedApp?.approval_required && (
               <Alert
                 type="info"
