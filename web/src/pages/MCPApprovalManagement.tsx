@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Button,
   Card,
+  Descriptions,
   Input,
+  Modal,
   Popconfirm,
   Select,
   Space,
@@ -30,6 +32,9 @@ export default function MCPApprovalManagement() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [selected, setSelected] = useState<MCPApprovalRequest | null>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
 
   const [statusFilter, setStatusFilter] = useState<MCPApprovalStatus | undefined>();
   const [gatewayFilter, setGatewayFilter] = useState("");
@@ -42,6 +47,14 @@ export default function MCPApprovalManagement() {
   useEffect(() => {
     load();
   }, [statusFilter, gatewayFilter, appFilter]);
+
+  const appNameById = useMemo(() => {
+    const out = new Map<number, string>();
+    for (const app of apps) {
+      out.set(app.id, app.name);
+    }
+    return out;
+  }, [apps]);
 
   async function load() {
     setLoading(true);
@@ -61,11 +74,11 @@ export default function MCPApprovalManagement() {
     }
   }
 
-  async function transition(requestId: string, action: "approve" | "reject" | "expire") {
+  async function transition(requestId: string, action: "approve" | "reject" | "expire", reason?: string) {
     setBusyId(requestId);
     try {
       if (action === "approve") await api.mcpApprovals.approve(requestId);
-      if (action === "reject") await api.mcpApprovals.reject(requestId, "Rejected by admin");
+      if (action === "reject") await api.mcpApprovals.reject(requestId, reason || "Rejected by admin");
       if (action === "expire") await api.mcpApprovals.expire(requestId);
       message.success(`Request ${action}d`);
       await load();
@@ -74,6 +87,18 @@ export default function MCPApprovalManagement() {
     } finally {
       setBusyId(null);
     }
+  }
+
+  function openReview(row: MCPApprovalRequest) {
+    setSelected(row);
+    setRejectReason("");
+    setReviewOpen(true);
+  }
+
+  function closeReview() {
+    setReviewOpen(false);
+    setSelected(null);
+    setRejectReason("");
   }
 
   const columns = [
@@ -126,15 +151,18 @@ export default function MCPApprovalManagement() {
       title: "Actions",
       key: "actions",
       render: (_: unknown, row: MCPApprovalRequest) => {
-        if (row.status !== "pending") return <Text type="secondary">No actions</Text>;
+        if (row.status !== "pending") {
+          return (
+            <Button size="small" onClick={() => openReview(row)}>
+              View
+            </Button>
+          );
+        }
         const busy = busyId === row.request_id;
         return (
           <Space>
-            <Button size="small" type="primary" loading={busy} onClick={() => transition(row.request_id, "approve")}>
-              Approve
-            </Button>
-            <Button size="small" danger loading={busy} onClick={() => transition(row.request_id, "reject")}>
-              Reject
+            <Button size="small" type="primary" loading={busy} onClick={() => openReview(row)}>
+              Review
             </Button>
             <Popconfirm title="Expire this request?" onConfirm={() => transition(row.request_id, "expire")}>
               <Button size="small" loading={busy}>
@@ -204,6 +232,100 @@ export default function MCPApprovalManagement() {
           pagination={{ pageSize: 10 }}
         />
       </Card>
+
+      <Modal
+        title="Authorize MCP Request"
+        open={reviewOpen}
+        onCancel={closeReview}
+        destroyOnClose
+        width={900}
+        footer={
+          selected?.status === "pending" ? (
+            <Space>
+              <Button onClick={closeReview}>Cancel</Button>
+              <Button
+                danger
+                loading={busyId === selected.request_id}
+                onClick={async () => {
+                  await transition(selected.request_id, "reject", rejectReason.trim() || "Rejected by admin");
+                  closeReview();
+                }}
+              >
+                Reject
+              </Button>
+              <Button
+                type="primary"
+                loading={busyId === selected.request_id}
+                onClick={async () => {
+                  await transition(selected.request_id, "approve");
+                  closeReview();
+                }}
+              >
+                Approve
+              </Button>
+            </Space>
+          ) : (
+            <Button onClick={closeReview}>Close</Button>
+          )
+        }
+      >
+        {selected && (
+          <Space direction="vertical" size={16} style={{ width: "100%" }}>
+            <Descriptions title="Request Details" bordered size="small" column={2}>
+              <Descriptions.Item label="Request ID">
+                <Text code>{selected.request_id}</Text>
+              </Descriptions.Item>
+              <Descriptions.Item label="Status">{renderStatus(selected.status)}</Descriptions.Item>
+              <Descriptions.Item label="Gateway ID">{selected.gateway_id}</Descriptions.Item>
+              <Descriptions.Item label="Requested By">{selected.requested_by || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Application" span={2}>
+                {selected.application_id
+                  ? `${appNameById.get(selected.application_id) || "Unknown app"} (id=${selected.application_id})`
+                  : "—"}
+              </Descriptions.Item>
+              <Descriptions.Item label="Created">{new Date(selected.created_at).toLocaleString()}</Descriptions.Item>
+              <Descriptions.Item label="Expires">
+                {selected.expires_at ? new Date(selected.expires_at).toLocaleString() : "—"}
+              </Descriptions.Item>
+            </Descriptions>
+
+            <Descriptions title="Authorization Input" bordered size="small" column={1}>
+              <Descriptions.Item label="Principal">
+                {selected.principal_type}::{selected.principal_id}
+              </Descriptions.Item>
+              <Descriptions.Item label="Action">{selected.action}</Descriptions.Item>
+              <Descriptions.Item label="Resource">
+                <Text code>{selected.resource}</Text>
+              </Descriptions.Item>
+              <Descriptions.Item label="Tool">
+                {selected.tool_server}:{selected.tool_name}
+              </Descriptions.Item>
+              <Descriptions.Item label="Reason">{selected.reason || "—"}</Descriptions.Item>
+            </Descriptions>
+
+            <Descriptions title="Decision Context" bordered size="small" column={1}>
+              <Descriptions.Item label="Context JSON">
+                <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>
+                  {JSON.stringify(selected.decision_context ?? {}, null, 2)}
+                </pre>
+              </Descriptions.Item>
+            </Descriptions>
+
+            {selected.status === "pending" && (
+              <div>
+                <Text strong>Rejection reason (optional)</Text>
+                <Input.TextArea
+                  placeholder="Provide reason for rejection"
+                  rows={3}
+                  style={{ marginTop: 8 }}
+                  value={rejectReason}
+                  onChange={(e) => setRejectReason(e.target.value)}
+                />
+              </div>
+            )}
+          </Space>
+        )}
+      </Modal>
     </Space>
   );
 }
