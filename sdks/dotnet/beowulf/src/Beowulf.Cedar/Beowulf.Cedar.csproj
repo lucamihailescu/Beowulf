@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <PackageId>Beowulf.Cedar</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Cedar Contributors</Authors>
+    <Company>Cedar</Company>
+    <Description>Beowulf .NET SDK for Cedar authorization checks.</Description>
+    <PackageProjectUrl>https://github.com/lucamihailescu/cedar</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/lucamihailescu/cedar</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>authorization;cedar;sdk;policy</PackageTags>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="\" Link="README.md" />
+  </ItemGroup>
+</Project>

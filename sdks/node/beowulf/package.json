@@ -1,0 +1,27 @@
+{
+  "name": "beowulf-cedar-sdk",
+  "version": "0.1.0",
+  "description": "Beowulf Node.js SDK for Cedar authorization checks",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "types": "src/index.d.ts",
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "authorization",
+    "cedar",
+    "sdk",
+    "node",
+    "policy"
+  ],
+  "author": "Cedar Contributors",
+  "license": "Apache-2.0"
+}
