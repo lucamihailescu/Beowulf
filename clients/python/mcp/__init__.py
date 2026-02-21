@@ -9,14 +9,19 @@ Features:
 - SSE-based real-time cache invalidation
 - Tool filtering based on user permissions
 - Decorator-based authorization enforcement
+- Per-application runtime API key authentication (`X-API-Key`)
 
 Example:
+    import os
     from cedar_mcp import CedarMCPAuthorizer, CedarMCPConfig
     
     config = CedarMCPConfig(
         cedar_url="http://localhost:8080",
         app_id=1,
-        cache_ttl_seconds=60
+        cache_ttl_seconds=60,
+        auth_headers={
+            "X-API-Key": os.environ["CEDAR_APP_API_KEY"],
+        },
     )
     
     authorizer = CedarMCPAuthorizer(config)

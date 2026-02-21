@@ -3,6 +3,9 @@ MCP Authorization helpers for Cedar integration.
 
 This module provides the main CedarMCPAuthorizer class that MCP servers
 can use to enforce authorization on tool calls.
+
+For runtime integrations, pass a per-application API key in `auth_headers`,
+for example: `{"X-API-Key": os.environ["CEDAR_APP_API_KEY"]}`.
 """
 
 import functools
@@ -44,7 +47,8 @@ class CedarMCPConfig:
     # Enable SSE subscription for real-time invalidation
     enable_sse: bool = True
     
-    # Authentication headers
+    # Authentication headers for Cedar API requests
+    # Example: {"X-API-Key": "<per-application-runtime-key>"}
     auth_headers: Dict[str, str] = field(default_factory=dict)
     
     # Default principal type
@@ -65,10 +69,15 @@ class CedarMCPAuthorizer:
     - Entitlements lookup for IdP integration
     
     Example:
+        import os
+
         config = CedarMCPConfig(
             cedar_url="http://localhost:8080",
             app_id=1,
-            cache_ttl_seconds=60
+            cache_ttl_seconds=60,
+            auth_headers={
+                "X-API-Key": os.environ["CEDAR_APP_API_KEY"],
+            }
         )
         
         authorizer = CedarMCPAuthorizer(config)

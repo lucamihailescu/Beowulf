@@ -15,6 +15,8 @@ This directory contains client SDKs for integrating with the Enterprise Policy M
 The Python MCP SDK provides authorization helpers for AI/LLM tool servers:
 
 ```python
+import os
+
 from clients.python.mcp import CedarMCPAuthorizer, CedarMCPConfig
 
 # Configure the authorizer
@@ -22,7 +24,11 @@ config = CedarMCPConfig(
     cedar_url="http://localhost:8080",
     app_id=1,
     cache_ttl_seconds=60,
-    enable_sse=True  # Real-time cache invalidation
+    enable_sse=True,  # Real-time cache invalidation
+    auth_headers={
+        # Per-application runtime key (recommended for MCP/runtime calls)
+        "X-API-Key": os.environ["CEDAR_APP_API_KEY"],
+    },
 )
 
 authorizer = CedarMCPAuthorizer(config)
@@ -51,6 +57,7 @@ async def read_document(user_id: str, doc_id: str):
 The `/v1/entitlements` endpoint allows Identity Providers to query user permissions:
 
 ```python
+import os
 import requests
 
 response = requests.post(
@@ -61,7 +68,7 @@ response = requests.post(
         "groups": ["analysts", "team-alpha"],
         "include_inherited": True
     },
-    headers={"Authorization": "Bearer <token>"}
+    headers={"X-API-Key": os.environ["CEDAR_APP_API_KEY"]},
 )
 
 # Response:
@@ -92,7 +99,8 @@ def on_policy_update(event):
 subscriber = SSESubscriber(
     url="http://localhost:8080/v1/events",
     on_event=on_policy_update,
-    app_id=1  # Optional filter
+    app_id=1,  # Optional filter
+    headers={"X-API-Key": os.environ["CEDAR_APP_API_KEY"]},
 )
 subscriber.start()
 ```
@@ -274,7 +282,38 @@ clients/
 
 ## Authentication
 
-### API Key (Read-Only Access)
+### Per-Application Runtime API Key (Recommended for MCP/runtime)
+
+Use a per-application key for runtime calls (`/v1/authorize`, `/v1/entitlements`).
+These keys are bound to one application and cannot be used for another app ID.
+
+Get a runtime key from:
+- `POST /v1/apps/` (initial key on app creation)
+- `POST /v1/apps/{id}/api-keys` (create/rotate additional runtime keys)
+
+Store the plaintext key in your secret manager; it is returned once.
+
+```python
+import os
+import requests
+
+app_id = 1
+runtime_key = os.environ["CEDAR_APP_API_KEY"]
+
+response = requests.post(
+    "http://localhost:8080/v1/authorize",
+    json={
+        "application_id": app_id,
+        "principal": {"type": "User", "id": "alice"},
+        "action": {"type": "Action", "id": "view"},
+        "resource": {"type": "Document", "id": "doc-1"},
+        "context": {}
+    },
+    headers={"X-API-Key": runtime_key}
+)
+```
+
+### Global API Key (Read-Only / Legacy)
 
 ```python
 # Python example with API Key
@@ -289,7 +328,7 @@ response = requests.get(
 ### JWT Authentication
 
 ```python
-# Python example with JWT
+# Python example with JWT (admin/user flows)
 response = requests.post(
     "http://localhost:8080/v1/authorize",
     headers={"Authorization": "Bearer your-jwt-token"},
