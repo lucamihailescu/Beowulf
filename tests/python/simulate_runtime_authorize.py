@@ -60,6 +60,10 @@ def _authorize(base_url: str, app_api_key: str, payload: dict, timeout: float) -
     return resp.status_code, body
 
 
+def _print_json(data: dict) -> None:
+    print(json.dumps(data, indent=2, sort_keys=True))
+
+
 def _run_single(args: argparse.Namespace) -> int:
     app_id = int(_require(args.app_id, "--app-id / CEDAR_APP_ID"))
     app_api_key = _require(args.api_key, "--api-key / CEDAR_APP_API_KEY")
@@ -80,13 +84,36 @@ def _run_single(args: argparse.Namespace) -> int:
     }
 
     status_code, body = _authorize(args.base_url, app_api_key, payload, args.timeout)
-    if status_code != 200:
-        print(f"[ERROR] HTTP {status_code}: {body}")
-        return 1
-
     decision = str(body.get("decision", "")).lower()
     reasons = body.get("reasons", [])
     errors = body.get("errors", [])
+    expected = args.expect
+    http_ok = status_code == 200
+    expectation_ok = expected is None or decision == expected
+    ok = http_ok and expectation_ok
+    exit_code = 0 if ok else (2 if http_ok else 1)
+
+    result = {
+        "mode": "single",
+        "ok": ok,
+        "status_code": status_code,
+        "decision": decision,
+        "expected": expected,
+        "reasons": reasons,
+        "errors": errors,
+        "response": body,
+    }
+    if args.show_payload:
+        result["payload"] = payload
+
+    if args.output == "json":
+        _print_json(result)
+        return exit_code
+
+    if not http_ok:
+        print(f"[ERROR] HTTP {status_code}: {body}")
+        return 1
+
     print(f"[RESULT] decision={decision}")
     if reasons:
         print(f"[REASONS] {reasons}")
@@ -95,8 +122,8 @@ def _run_single(args: argparse.Namespace) -> int:
     if args.show_payload:
         print("[PAYLOAD]", json.dumps(payload, indent=2))
 
-    if args.expect and decision != args.expect:
-        print(f"[FAIL] expected decision={args.expect}, got {decision}")
+    if not expectation_ok:
+        print(f"[FAIL] expected decision={expected}, got {decision}")
         return 2
     return 0
 
@@ -105,10 +132,19 @@ def _run_cases(args: argparse.Namespace) -> int:
     app_api_key = _require(args.api_key, "--api-key / CEDAR_APP_API_KEY")
     cases = _load_cases(args.cases_file)
     failures: list[str] = []
+    results: list[dict] = []
 
     for idx, case in enumerate(cases, 1):
         if not isinstance(case, dict):
             failures.append(f"case[{idx}] is not an object")
+            results.append(
+                {
+                    "index": idx,
+                    "name": f"case-{idx}",
+                    "ok": False,
+                    "error": "case is not an object",
+                }
+            )
             continue
 
         name = str(case.get("name", f"case-{idx}"))
@@ -116,21 +152,68 @@ def _run_cases(args: argparse.Namespace) -> int:
         expected = case.get("expected")
         if not isinstance(payload, dict):
             failures.append(f"{name}: payload missing/invalid")
+            results.append(
+                {
+                    "index": idx,
+                    "name": name,
+                    "ok": False,
+                    "error": "payload missing/invalid",
+                    "expected": expected,
+                }
+            )
             continue
 
         status_code, body = _authorize(args.base_url, app_api_key, payload, args.timeout)
-        if status_code != 200:
-            print(f"[FAIL] {name}: HTTP {status_code} -> {body}")
-            failures.append(f"{name}: HTTP {status_code}")
-            continue
-
         decision = str(body.get("decision", "")).lower()
-        if expected is not None and decision != str(expected).lower():
-            print(f"[FAIL] {name}: expected={expected} got={decision}")
-            failures.append(f"{name}: expected={expected} got={decision}")
+        expected_norm = str(expected).lower() if expected is not None else None
+        http_ok = status_code == 200
+        expectation_ok = expected_norm is None or decision == expected_norm
+        case_ok = http_ok and expectation_ok
+
+        results.append(
+            {
+                "index": idx,
+                "name": name,
+                "ok": case_ok,
+                "status_code": status_code,
+                "decision": decision,
+                "expected": expected_norm,
+                "response": body,
+            }
+        )
+
+        if status_code != 200:
+            failures.append(f"{name}: HTTP {status_code}")
+            if args.output == "text":
+                print(f"[FAIL] {name}: HTTP {status_code} -> {body}")
             continue
 
-        print(f"[PASS] {name}: decision={decision}")
+        if not expectation_ok:
+            failures.append(f"{name}: expected={expected} got={decision}")
+            if args.output == "text":
+                print(f"[FAIL] {name}: expected={expected} got={decision}")
+            continue
+
+        if args.output == "text":
+            print(f"[PASS] {name}: decision={decision}")
+
+    summary = {
+        "total": len(cases),
+        "passed": len(cases) - len(failures),
+        "failed": len(failures),
+    }
+
+    if args.output == "json":
+        _print_json(
+            {
+                "mode": "batch",
+                "ok": len(failures) == 0,
+                "summary": summary,
+                "results": results,
+                "failures": failures,
+            }
+        )
+        return 0 if not failures else 2
 
     if failures:
         print("\nBatch failures:")
@@ -148,6 +231,7 @@ def main() -> int:
     parser.add_argument("--base-url", default=os.getenv("CEDAR_BASE_URL", "http://localhost:8080"))
     parser.add_argument("--api-key", default=os.getenv("CEDAR_APP_API_KEY"))
     parser.add_argument("--timeout", type=float, default=10.0)
+    parser.add_argument("--output", choices=["text", "json"], default="text")
     parser.add_argument("--show-payload", action="store_true")
 
     # Single-call mode args
@@ -174,10 +258,16 @@ def main() -> int:
             return _run_cases(args)
         return _run_single(args)
     except ValueError as exc:
-        print(f"[ERROR] {exc}")
+        if args.output == "json":
+            _print_json({"ok": False, "error": str(exc), "status_code": 1})
+        else:
+            print(f"[ERROR] {exc}")
         return 1
     except requests.RequestException as exc:
-        print(f"[ERROR] request failed: {exc}")
+        if args.output == "json":
+            _print_json({"ok": False, "error": f"request failed: {exc}", "status_code": 1})
+        else:
+            print(f"[ERROR] request failed: {exc}")
         return 1
 
 
