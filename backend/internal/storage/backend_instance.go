@@ -27,6 +27,7 @@ type BackendInstance struct {
 	Hostname              string                `json:"hostname"`
 	IPAddress             string                `json:"ip_address,omitempty"`
 	Status                BackendInstanceStatus `json:"status"`
+	Requests              int64                 `json:"requests"`
 	CertFingerprint       string                `json:"cert_fingerprint,omitempty"`
 	ClusterSecretVerified bool                  `json:"cluster_secret_verified"`
 
@@ -449,6 +450,16 @@ func (r *BackendInstanceRepo) List(ctx context.Context, status *BackendInstanceS
 		}
 		if len(metadata) > 0 {
 			_ = json.Unmarshal(metadata, &inst.Metadata)
+			if requestsValue, ok := inst.Metadata["requests"]; ok {
+				switch value := requestsValue.(type) {
+				case float64:
+					inst.Requests = int64(value)
+				case int64:
+					inst.Requests = value
+				case int:
+					inst.Requests = int64(value)
+				}
+			}
 		}
 
 		instances = append(instances, inst)
@@ -529,6 +540,16 @@ func (r *BackendInstanceRepo) Approve(ctx context.Context, instanceID string, ap
 	}
 	if len(metadata) > 0 {
 		_ = json.Unmarshal(metadata, &inst.Metadata)
+		if requestsValue, ok := inst.Metadata["requests"]; ok {
+			switch value := requestsValue.(type) {
+			case float64:
+				inst.Requests = int64(value)
+			case int64:
+				inst.Requests = value
+			case int:
+				inst.Requests = int64(value)
+			}
+		}
 	}
 
 	return &inst, nil
@@ -607,6 +628,16 @@ func (r *BackendInstanceRepo) Reject(ctx context.Context, instanceID string, rej
 	}
 	if len(metadata) > 0 {
 		_ = json.Unmarshal(metadata, &inst.Metadata)
+			if requestsValue, ok := inst.Metadata["requests"]; ok {
+				switch value := requestsValue.(type) {
+				case float64:
+					inst.Requests = int64(value)
+				case int64:
+					inst.Requests = value
+				case int:
+					inst.Requests = int64(value)
+				}
+			}
 	}
 
 	return &inst, nil

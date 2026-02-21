@@ -198,12 +198,19 @@ func (r *InstanceRegistry) register(ctx context.Context) {
 
 	// Also register to database for persistent tracking and approval workflow
 	if backendInstRepo != nil {
+		metadata := map[string]interface{}{
+			"requests":    info.Requests,
+			"status":      info.Status,
+			"uptime":      info.Uptime,
+			"sse_clients": info.SSEClients,
+		}
 		_, err := backendInstRepo.Register(ctx, BackendInstanceRegisterRequest{
 			InstanceID:   r.instanceID,
 			Hostname:     r.hostname,
 			CedarVersion: r.cedarVersion,
 			OSInfo:       runtime.GOOS,
 			Arch:         runtime.GOARCH,
+			Metadata:     metadata,
 		})
 		if err != nil {
 			log.Printf("Instance registry: failed to register to database: %v", err)

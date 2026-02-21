@@ -308,16 +308,6 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 
-	// Request counting middleware
-	if instanceRegistry != nil {
-		r.Use(func(next http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				instanceRegistry.IncrementRequestCount()
-				next.ServeHTTP(w, r)
-			})
-		})
-	}
-
 	// Initialize auth middleware (reads auth settings from database first, then falls back to env vars)
 	authMiddleware, err := NewAuthMiddleware(cfg, settings)
 	if err != nil {
@@ -913,6 +903,11 @@ func (a *API) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{"error": "application_id, principal, action, and resource are required"})
 		return
+	}
+
+	// Count only decision-traffic requests (authorize endpoint), not general API/health traffic.
+	if a.instanceRegistry != nil {
+		a.instanceRegistry.IncrementRequestCount()
 	}
 
 	if appKey := GetApplicationAPIKeyFromContext(r.Context()); appKey != nil && appKey.ApplicationID != req.ApplicationID {

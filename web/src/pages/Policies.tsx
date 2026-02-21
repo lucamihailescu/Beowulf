@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
-import { Alert, Button, Card, Checkbox, Col, Collapse, Input, Modal, Row, Select, Space, Table, Tabs, Tag, Typography, theme, message } from "antd";
-import { FileTextOutlined, PlusOutlined, ThunderboltOutlined, EyeOutlined, AppstoreOutlined, WifiOutlined, ExperimentOutlined } from "@ant-design/icons";
+import { Alert, Button, Card, Checkbox, Col, Input, Modal, Popconfirm, Radio, Row, Select, Space, Steps, Table, Tabs, Tag, Tooltip, Typography, theme, message } from "antd";
+import { DeleteOutlined, FileTextOutlined, PlusOutlined, ThunderboltOutlined, EyeOutlined, AppstoreOutlined, ExperimentOutlined } from "@ant-design/icons";
 import { api, type Application, type AuthorizeResponse, type CedarEntity, type PolicyDetails, type PolicySummary, type Schema, type SchemaMetadata } from "../api";
-import PolicyDragDropBuilder from "../components/PolicyDragDropBuilder";
 import PolicyTemplateWizard from "../components/PolicyTemplateWizard";
 import PolicySimulator from "../components/PolicySimulator";
-import { usePolicyUpdates, useSSEContext } from "../contexts/SSEContext";
+import { usePolicyUpdates } from "../contexts/SSEContext";
 import { normalizeSchemaMetadata, parseSchemaMetadataFromText } from "../schemaMetadata";
 
 const DEFAULT_POLICY = `permit (
@@ -13,6 +12,23 @@ const DEFAULT_POLICY = `permit (
   action == Action::"view",
   resource == Document::"demo-doc"
 );`;
+
+const POLICY_TEMPLATE_STORAGE_KEY = "cedar.policy.reusable_templates.v1";
+
+type ReusablePolicyTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  intent: "permit" | "forbid";
+  principalType: string;
+  principalId: string;
+  actions: string[];
+  resourceType: string;
+  resourceId: string;
+  conditionsText: string;
+  policyText: string;
+  createdAt: string;
+};
 
 export default function Policies() {
   const { token } = theme.useToken();
@@ -37,7 +53,6 @@ export default function Policies() {
   const [savingExisting, setSavingExisting] = useState(false);
 
   const [entities, setEntities] = useState<CedarEntity[]>([]);
-  const [entitiesLoading, setEntitiesLoading] = useState(false);
 
   const [activeSchema, setActiveSchema] = useState<Schema | null>(null);
   const [activeSchemaMetadata, setActiveSchemaMetadata] = useState<SchemaMetadata | null>(null);
@@ -48,10 +63,22 @@ export default function Policies() {
   const [description, setDescription] = useState("");
   const [policyText, setPolicyText] = useState(DEFAULT_POLICY);
   const [activate, setActivate] = useState(true);
+  const [intent, setIntent] = useState<"permit" | "forbid">("permit");
+  const [scopePrincipalType, setScopePrincipalType] = useState("User");
+  const [scopePrincipalId, setScopePrincipalId] = useState("alice");
+  const [scopeActions, setScopeActions] = useState<string[]>(["Action:view"]);
+  const [scopeResourceType, setScopeResourceType] = useState("Document");
+  const [scopeResourceId, setScopeResourceId] = useState("demo-doc");
+  const [conditionsText, setConditionsText] = useState("");
+  const [savedTemplates, setSavedTemplates] = useState<ReusablePolicyTemplate[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | undefined>(undefined);
+  const [templateName, setTemplateName] = useState("");
+  const [templateDescription, setTemplateDescription] = useState("");
 
   const [authzPrincipal, setAuthzPrincipal] = useState("User:alice");
   const [authzAction, setAuthzAction] = useState("Action:view");
   const [authzResource, setAuthzResource] = useState("Document:demo-doc");
+  const [authzContextJson, setAuthzContextJson] = useState("{}");
   const [authzResult, setAuthzResult] = useState<AuthorizeResponse | null>(null);
 
   const [activeTab, setActiveTab] = useState("view");
@@ -62,9 +89,6 @@ export default function Policies() {
   console.log('[Policies] simulatorOpen:', simulatorOpen, 'selectedPolicy:', selectedPolicy?.id, 'editPolicyText length:', editPolicyText.length);
 
   const selectedApp = useMemo(() => apps.find((a) => a.id === selectedAppId), [apps, selectedAppId]);
-
-  // Get SSE connection status
-  const { connected: sseConnected } = useSSEContext();
 
   // Load policies function that can be called from SSE handler
   const loadPolicies = useCallback(async () => {
@@ -122,6 +146,23 @@ export default function Policies() {
   }, []);
 
   useEffect(() => {
+    try {
+      const stored = localStorage.getItem(POLICY_TEMPLATE_STORAGE_KEY);
+      if (!stored) return;
+      const parsed = JSON.parse(stored) as ReusablePolicyTemplate[];
+      if (Array.isArray(parsed)) {
+        setSavedTemplates(parsed);
+      }
+    } catch {
+      // Ignore malformed localStorage values.
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(POLICY_TEMPLATE_STORAGE_KEY, JSON.stringify(savedTemplates));
+  }, [savedTemplates]);
+
+  useEffect(() => {
     if (selectedAppId === "" && apps.length > 0) {
       setSelectedAppId(apps[0].id);
     }
@@ -139,14 +180,11 @@ export default function Policies() {
     }
 
     (async () => {
-      setEntitiesLoading(true);
       try {
         const items = await api.listEntities(selectedAppId);
         setEntities(Array.isArray(items) ? items : []);
       } catch (e) {
         setEntities([]);
-      } finally {
-        setEntitiesLoading(false);
       }
     })();
 
@@ -234,6 +272,172 @@ export default function Policies() {
     return map;
   }, [entities]);
 
+  const principalTypeOptions = useMemo(
+    () => entityTypes.filter((t) => t === "User" || t === "Group" || t.endsWith("::User") || t.endsWith("::Group")),
+    [entityTypes]
+  );
+
+  const actionOptions = useMemo(
+    () => schemaActionRefs.map((a) => `${a.actionType}:${a.actionId}`),
+    [schemaActionRefs]
+  );
+  const scopeEntityTypeOptions = useMemo(
+    () => (entityTypes.length > 0 ? entityTypes : ["User", "Group", "Document", "Folder", "Resource"]),
+    [entityTypes]
+  );
+
+  const principalIdOptions = useMemo(() => entityIdsByType.get(scopePrincipalType) ?? [], [entityIdsByType, scopePrincipalType]);
+  const resourceIdOptions = useMemo(() => entityIdsByType.get(scopeResourceType) ?? [], [entityIdsByType, scopeResourceType]);
+
+  const parsedConditions = useMemo(
+    () =>
+      conditionsText
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean),
+    [conditionsText]
+  );
+
+  const generatedPolicyText = useMemo(() => {
+    const escapeCedarString = (value: string) => value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const principalRef = resolveBuilderRef(scopePrincipalType, scopePrincipalId);
+    const resourceRef = resolveBuilderRef(scopeResourceType, scopeResourceId);
+    const principalOperator = principalRef.type === "Group" || principalRef.type.endsWith("::Group") ? "in" : "==";
+    const validActions = scopeActions
+      .map((raw) => parseRef(raw))
+      .filter((value) => value.type && value.id);
+    const actionsToUse = validActions.length > 0 ? validActions : [{ type: "Action", id: "view" }];
+
+    const whenClause =
+      parsedConditions.length > 0
+        ? `\n) when {\n  ${parsedConditions.join("\n  && ")}\n};`
+        : `\n);`;
+
+    return actionsToUse
+      .map(
+        (actionRef) => `${intent} (
+  principal ${principalOperator} ${principalRef.type}::"${escapeCedarString(principalRef.id)}",
+  action == ${actionRef.type}::"${escapeCedarString(actionRef.id)}",
+  resource == ${resourceRef.type}::"${escapeCedarString(resourceRef.id)}"${whenClause}`
+      )
+      .join("\n\n");
+  }, [intent, scopePrincipalType, scopePrincipalId, scopeActions, scopeResourceType, scopeResourceId, parsedConditions]);
+
+  const builderValidationIssues = useMemo(() => {
+    const issues: string[] = [];
+    const principalRef = resolveBuilderRef(scopePrincipalType, scopePrincipalId);
+    const resourceRef = resolveBuilderRef(scopeResourceType, scopeResourceId);
+    if (!name.trim()) issues.push("Add a policy name in Step 1.");
+    if (!principalRef.type || !principalRef.id) issues.push("Select principal type and principal ID in Step 2.");
+    if (scopeActions.length === 0) issues.push("Select at least one action in Step 2.");
+    if (!resourceRef.type || !resourceRef.id) issues.push("Select resource type and resource ID in Step 2.");
+    if (!generatedPolicyText.trim()) issues.push("Generated Cedar policy preview is empty.");
+    return issues;
+  }, [name, scopePrincipalType, scopePrincipalId, scopeActions, scopeResourceType, scopeResourceId, generatedPolicyText]);
+
+  function resetBuilderState() {
+    setIntent("permit");
+    setName("");
+    setDescription("");
+    setActivate(true);
+    setScopePrincipalType(principalTypeOptions[0] ?? "User");
+    setScopePrincipalId("alice");
+    setScopeActions(actionOptions.length > 0 ? [actionOptions[0]] : ["Action:view"]);
+    setScopeResourceType(
+      scopeEntityTypeOptions.find((t) => !(t === "User" || t === "Group" || t.endsWith("::User") || t.endsWith("::Group"))) ?? "Document"
+    );
+    setScopeResourceId("demo-doc");
+    setConditionsText("");
+    setSelectedTemplateId(undefined);
+    setTemplateName("");
+    setTemplateDescription("");
+  }
+
+  function loadTemplate(templateId: string) {
+    const template = savedTemplates.find((item) => item.id === templateId);
+    if (!template) return;
+    setSelectedTemplateId(template.id);
+    setTemplateName(template.name);
+    setTemplateDescription(template.description);
+    setIntent(template.intent);
+    setName(template.name);
+    setDescription(template.description);
+    setScopePrincipalType(template.principalType);
+    setScopePrincipalId(template.principalId);
+    setScopeActions(template.actions.length > 0 ? template.actions : ["Action:view"]);
+    setScopeResourceType(template.resourceType);
+    setScopeResourceId(template.resourceId);
+    setConditionsText(template.conditionsText);
+    setPolicyText(template.policyText);
+  }
+
+  function saveReusableTemplate() {
+    if (!templateName.trim()) {
+      setError("Add a reusable template name before saving.");
+      return;
+    }
+    const nextTemplate: ReusablePolicyTemplate = {
+      id: selectedTemplateId ?? `${Date.now()}`,
+      name: templateName.trim(),
+      description: templateDescription.trim(),
+      intent,
+      principalType: scopePrincipalType,
+      principalId: scopePrincipalId,
+      actions: scopeActions,
+      resourceType: scopeResourceType,
+      resourceId: scopeResourceId,
+      conditionsText,
+      policyText: generatedPolicyText,
+      createdAt: new Date().toISOString(),
+    };
+    setSavedTemplates((prev) => {
+      const exists = prev.some((item) => item.id === nextTemplate.id);
+      const updated = exists ? prev.map((item) => (item.id === nextTemplate.id ? nextTemplate : item)) : [nextTemplate, ...prev];
+      return updated;
+    });
+    setNotice(`Reusable template "${nextTemplate.name}" saved.`);
+    setSelectedTemplateId(nextTemplate.id);
+  }
+
+  function deleteReusableTemplate(templateId: string) {
+    setSavedTemplates((prev) => prev.filter((item) => item.id !== templateId));
+    if (selectedTemplateId === templateId) {
+      setSelectedTemplateId(undefined);
+    }
+  }
+
+  useEffect(() => {
+    setPolicyText(generatedPolicyText);
+  }, [generatedPolicyText]);
+
+  useEffect(() => {
+    if (principalTypeOptions.length > 0 && !principalTypeOptions.includes(scopePrincipalType)) {
+      setScopePrincipalType(principalTypeOptions[0]);
+    }
+  }, [principalTypeOptions, scopePrincipalType]);
+
+  useEffect(() => {
+    if (actionOptions.length === 0) return;
+    const validSelected = scopeActions.filter((item) => actionOptions.includes(item));
+    if (validSelected.length === 0) {
+      setScopeActions([actionOptions[0]]);
+      return;
+    }
+    if (validSelected.length !== scopeActions.length) {
+      setScopeActions(validSelected);
+    }
+  }, [actionOptions, scopeActions]);
+
+  useEffect(() => {
+    if (scopeEntityTypeOptions.length === 0) return;
+    if (!scopeEntityTypeOptions.includes(scopeResourceType)) {
+      const fallbackResourceType =
+        scopeEntityTypeOptions.find((t) => !(t === "User" || t === "Group" || t.endsWith("::User") || t.endsWith("::Group"))) ??
+        scopeEntityTypeOptions[0];
+      setScopeResourceType(fallbackResourceType);
+    }
+  }, [scopeEntityTypeOptions, scopeResourceType]);
+
   async function onCreatePolicy() {
     setError("");
     setNotice("");
@@ -258,9 +462,7 @@ export default function Policies() {
         setNotice("Policy saved successfully!");
       }
       setPolicyValidationWarnings(res.validation?.warnings ?? []);
-      setName("");
-      setDescription("");
-      setPolicyText(DEFAULT_POLICY);
+      resetBuilderState();
       const items = await api.listPolicies(selectedAppId);
       setPolicies(items);
       setActiveTab("view");
@@ -441,6 +643,27 @@ export default function Policies() {
     return { type: raw, id: "" };
   }
 
+  function resolveBuilderRef(typeInput: string, idInput: string): { type: string; id: string } {
+    const typeValue = (typeInput ?? "").trim();
+    const idValue = (idInput ?? "").trim();
+    if (!typeValue) return { type: "", id: "" };
+    const cedarQuoted = typeValue.match(/^(.+)::"((?:\\.|[^"\\])*)"$/);
+    if (cedarQuoted) {
+      const [, parsedType, parsedID] = cedarQuoted;
+      return { type: parsedType.trim(), id: parsedID.replace(/\\"/g, '"').replace(/\\\\/g, "\\") };
+    }
+    const idAsFullUID = parseRef(idValue);
+    if (idAsFullUID.type && idAsFullUID.id) {
+      return idAsFullUID;
+    }
+    if (idValue) return { type: typeValue, id: idValue };
+    const parsed = parseRef(typeValue);
+    if (parsed.type && parsed.id) {
+      return parsed;
+    }
+    return { type: typeValue, id: "" };
+  }
+
   useEffect(() => {
     if (schemaActionRefs.length === 0) return;
     if (authzAction === "Action:view" || !authzAction.includes(":")) {
@@ -449,11 +672,38 @@ export default function Policies() {
     }
   }, [schemaActionRefs, authzAction]);
 
+  function populateAuthorizationFromBuilder() {
+    const firstAction = scopeActions[0] || "Action:view";
+    const principalRef = resolveBuilderRef(scopePrincipalType, scopePrincipalId);
+    const resourceRef = resolveBuilderRef(scopeResourceType, scopeResourceId);
+    const isGroupPrincipal = principalRef.type === "Group" || principalRef.type.endsWith("::Group");
+    if (isGroupPrincipal) {
+      const inferredUserType =
+        principalTypeOptions.find((t) => t === "User" || t.endsWith("::User")) ??
+        "User";
+      const inferredUserId = entityIdsByType.get(inferredUserType)?.[0] ?? "alice";
+      setAuthzPrincipal(`${inferredUserType}:${inferredUserId}`);
+      setNotice(`Group-based policy selected. Testing with ${inferredUserType}:${inferredUserId} because "principal in Group::..." expects a user/service principal.`);
+    } else {
+      setAuthzPrincipal(`${principalRef.type}:${principalRef.id}`);
+    }
+    setAuthzAction(firstAction);
+    setAuthzResource(`${resourceRef.type}:${resourceRef.id}`);
+    setAuthzResult(null);
+  }
+
   async function onAuthorize() {
     setError("");
     setNotice("");
     if (selectedAppId === "") {
       setError("Select an application first.");
+      return;
+    }
+    let parsedContext: Record<string, unknown> = {};
+    try {
+      parsedContext = authzContextJson.trim() ? (JSON.parse(authzContextJson) as Record<string, unknown>) : {};
+    } catch {
+      setError("Context JSON is invalid. Provide valid JSON in the test context field.");
       return;
     }
     setAuthorizing(true);
@@ -463,7 +713,7 @@ export default function Policies() {
         principal: parseRef(authzPrincipal),
         action: parseRef(authzAction),
         resource: parseRef(authzResource),
-        context: {},
+        context: parsedContext,
       });
       setAuthzResult(res);
     } catch (e) {
@@ -472,6 +722,14 @@ export default function Policies() {
       setAuthorizing(false);
     }
   }
+
+  const createFlowStep = useMemo(() => {
+    if (!name.trim()) return 0;
+    if (!scopePrincipalType || !scopePrincipalId || scopeActions.length === 0 || !scopeResourceType || !scopeResourceId) return 1;
+    if (!generatedPolicyText.trim()) return 2;
+    if (!authzResult) return 4;
+    return 5;
+  }, [name, scopePrincipalType, scopePrincipalId, scopeActions, scopeResourceType, scopeResourceId, generatedPolicyText, authzResult]);
 
   const tabItems = [
     {
@@ -532,7 +790,7 @@ export default function Policies() {
                   title: "Actions",
                   key: "actions",
                   width: 160,
-                  render: (_: any, record: PolicySummary) => (
+                  render: (_: unknown, record: PolicySummary) => (
                     <Space size="small" onClick={(e) => e.stopPropagation()}>
                       {record.latest_status === "pending_approval" && (
                         <Button size="small" type="primary" ghost onClick={() => onApprovePolicy(record)}>
@@ -572,95 +830,356 @@ export default function Policies() {
         </span>
       ),
       children: (
-        <Row gutter={[24, 24]}>
-          <Col xs={24} lg={14}>
-            <Space direction="vertical" size={24} style={{ width: "100%" }}>
-              {/* Visual Policy Builder */}
-              <PolicyDragDropBuilder
-                onPolicyGenerated={(generatedPolicy) => setPolicyText(generatedPolicy)}
-                entityTypes={entityTypes}
-                entityIdsByType={entityIdsByType}
-                actionRefs={schemaActionRefs}
+        <Space direction="vertical" size={16} style={{ width: "100%" }}>
+          <Alert
+            type="info"
+            showIcon
+            message="Guided Policy Flow"
+            description="Follow the six steps to define intent, scope, conditions, preview, validate with a sample request, and save as a policy or reusable template."
+          />
+
+          <Card
+            size="small"
+            title="Reusable Templates"
+            extra={
+              <Button icon={<AppstoreOutlined />} onClick={() => setTemplateWizardOpen(true)} disabled={selectedAppId === ""}>
+                Use Built-in Template Wizard
+              </Button>
+            }
+          >
+            <Space wrap style={{ width: "100%" }}>
+              <Select
+                allowClear
+                placeholder="Load reusable template..."
+                style={{ minWidth: 320 }}
+                value={selectedTemplateId}
+                onChange={(value) => {
+                  if (!value) {
+                    setSelectedTemplateId(undefined);
+                    return;
+                  }
+                  loadTemplate(value);
+                }}
+                options={savedTemplates.map((item) => ({
+                  value: item.id,
+                  label: `${item.name}${item.description ? ` - ${item.description}` : ""}`,
+                }))}
               />
-            </Space>
-          </Col>
-          
-          <Col xs={24} lg={10}>
-            <Card 
-              title="Save Policy" 
-              style={{ position: "sticky", top: 24 }}
-              extra={
-                <Button 
-                  icon={<AppstoreOutlined />}
-                  onClick={() => setTemplateWizardOpen(true)}
-                  disabled={selectedAppId === ""}
-                >
-                  Use Template
+              <Button onClick={resetBuilderState}>Start From Scratch</Button>
+              <Popconfirm
+                title="Delete selected template?"
+                description="This cannot be undone."
+                okText="Delete"
+                okButtonProps={{ danger: true }}
+                disabled={!selectedTemplateId}
+                onConfirm={() => selectedTemplateId && deleteReusableTemplate(selectedTemplateId)}
+              >
+                <Button danger icon={<DeleteOutlined />} disabled={!selectedTemplateId}>
+                  Delete Template
                 </Button>
-              }
+              </Popconfirm>
+            </Space>
+          </Card>
+
+          <Card size="small">
+            <Steps
+              current={createFlowStep}
+              items={[
+                { title: "Intent" },
+                { title: "Scope" },
+                { title: "Conditions" },
+                { title: "Preview" },
+                { title: "Validate + Test" },
+                { title: "Save" },
+              ]}
+            />
+          </Card>
+
+          <Card title="Step 1: Intent + Policy Identity">
+            <Row gutter={[16, 16]}>
+              <Col xs={24} lg={8}>
+                <Typography.Text strong style={{ display: "block", marginBottom: 6 }}>
+                  Intent
+                </Typography.Text>
+                <Radio.Group value={intent} onChange={(e) => setIntent(e.target.value)}>
+                  <Space direction="vertical">
+                    <Radio value="permit">Allow (`permit`)</Radio>
+                    <Radio value="forbid">Forbid (`forbid`)</Radio>
+                  </Space>
+                </Radio.Group>
+              </Col>
+              <Col xs={24} lg={16}>
+                <Space direction="vertical" size={12} style={{ width: "100%" }}>
+                  <div>
+                    <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>
+                      Policy Name <span style={{ color: token.colorError }}>*</span>
+                    </Typography.Text>
+                    <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g., allow-users-view-documents" />
+                  </div>
+                  <div>
+                    <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>
+                      Description (optional)
+                    </Typography.Text>
+                    <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Short description" />
+                  </div>
+                </Space>
+              </Col>
+            </Row>
+          </Card>
+
+          <Card title="Step 2: Scope (Principal, Actions, Resource)">
+            <Row gutter={[16, 16]}>
+              <Col xs={24} lg={8}>
+                <Typography.Text strong style={{ display: "block", marginBottom: 6 }}>
+                  Principal
+                </Typography.Text>
+                <Space.Compact style={{ width: "100%" }}>
+                  <Select
+                    style={{ width: 150 }}
+                    value={scopePrincipalType}
+                    onChange={setScopePrincipalType}
+                    options={(principalTypeOptions.length > 0 ? principalTypeOptions : scopeEntityTypeOptions).map((item) => ({ value: item, label: item }))}
+                  />
+                  <Input
+                    value={scopePrincipalId}
+                    onChange={(e) => setScopePrincipalId(e.target.value)}
+                    list="policy-principal-id-options"
+                    placeholder="principal id"
+                  />
+                </Space.Compact>
+                <datalist id="policy-principal-id-options">
+                  {principalIdOptions.map((item) => (
+                    <option key={item} value={item} />
+                  ))}
+                </datalist>
+              </Col>
+
+              <Col xs={24} lg={8}>
+                <Typography.Text strong style={{ display: "block", marginBottom: 6 }}>
+                  Action Set
+                </Typography.Text>
+                <Select
+                  mode="tags"
+                  value={scopeActions}
+                  onChange={setScopeActions}
+                  style={{ width: "100%" }}
+                  placeholder="Select one or more actions"
+                  options={actionOptions.map((item) => ({ value: item, label: item }))}
+                />
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Format: `ActionType:actionId` (for example `Action:view`)
+                </Typography.Text>
+              </Col>
+
+              <Col xs={24} lg={8}>
+                <Typography.Text strong style={{ display: "block", marginBottom: 6 }}>
+                  Resource
+                </Typography.Text>
+                <Space.Compact style={{ width: "100%" }}>
+                  <Select
+                    style={{ width: 150 }}
+                    value={scopeResourceType}
+                    onChange={setScopeResourceType}
+                    options={scopeEntityTypeOptions.map((item) => ({ value: item, label: item }))}
+                  />
+                  <Input
+                    value={scopeResourceId}
+                    onChange={(e) => setScopeResourceId(e.target.value)}
+                    list="policy-resource-id-options"
+                    placeholder="resource id"
+                  />
+                </Space.Compact>
+                <datalist id="policy-resource-id-options">
+                  {resourceIdOptions.map((item) => (
+                    <option key={item} value={item} />
+                  ))}
+                </datalist>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Tip: you can paste a full UID in Type or ID (for example `EmailAddress::"foo@bar.com"`).
+                </Typography.Text>
+              </Col>
+            </Row>
+          </Card>
+
+          <Card
+            title="Step 3: Conditions"
+            extra={
+              <Tooltip title="Each non-empty line becomes one condition, combined with AND in the final when-block.">
+                <Typography.Text type="secondary">How it works</Typography.Text>
+              </Tooltip>
+            }
+          >
+            <Space direction="vertical" size={10} style={{ width: "100%" }}>
+              <Input.TextArea
+                rows={5}
+                value={conditionsText}
+                onChange={(e) => setConditionsText(e.target.value)}
+                placeholder={`context.isBusinessHours == true\nresource.owner == principal\nprincipal.department == resource.department`}
+                style={{ fontFamily: "'Fira Code', 'Monaco', monospace", fontSize: 12 }}
+              />
+              {normalizedSchema.contextAttributes.length > 0 && (
+                <Space wrap>
+                  <Typography.Text type="secondary">Schema context attributes:</Typography.Text>
+                  {normalizedSchema.contextAttributes.slice(0, 10).map((attr) => (
+                    <Button
+                      key={attr}
+                      size="small"
+                      onClick={() =>
+                        setConditionsText((prev) => `${prev}${prev.trim() ? "\n" : ""}context.${attr} == true`)
+                      }
+                    >
+                      {attr}
+                    </Button>
+                  ))}
+                </Space>
+              )}
+            </Space>
+          </Card>
+
+          <Card title="Step 4: Live Cedar Preview">
+            <pre
+              style={{
+                padding: 16,
+                background: token.colorBgLayout,
+                borderRadius: 8,
+                margin: 0,
+                fontSize: 12,
+                fontFamily: "'Fira Code', 'Monaco', 'Consolas', monospace",
+                overflow: "auto",
+                maxHeight: 320,
+                border: `1px solid ${token.colorBorder}`,
+              }}
             >
-              <Space direction="vertical" size={16} style={{ width: "100%" }}>
-                <div>
-                  <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>
-                    Policy Name <span style={{ color: token.colorError }}>*</span>
-                  </Typography.Text>
-                  <Input 
-                    value={name} 
-                    onChange={(e) => setName(e.target.value)} 
-                    placeholder="e.g., allow-users-view-documents"
-                  />
-                </div>
-                
-                <div>
-                  <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>
-                    Description
-                  </Typography.Text>
-                  <Input 
-                    value={description} 
-                    onChange={(e) => setDescription(e.target.value)} 
-                    placeholder="Optional description"
-                  />
-                </div>
-                
-                <div>
-                  <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>
-                    Policy Text (Cedar)
-                  </Typography.Text>
-                  <Input.TextArea 
-                    value={policyText} 
-                    onChange={(e) => setPolicyText(e.target.value)} 
-                    rows={8}
-                    style={{ fontFamily: "'Fira Code', 'Monaco', monospace", fontSize: 12 }}
-                  />
-                </div>
+              {policyText || "// Complete steps 1-3 to generate policy text"}
+            </pre>
+          </Card>
 
-                {selectedApp?.approval_required && (
-                  <Alert
-                    type="info"
-                    showIcon
-                    message="Approval Required"
-                    description="This application requires approval for policy changes. Checking the box below will submit the policy for approval."
-                    style={{ marginBottom: 12 }}
-                  />
-                )}
-                <Checkbox checked={activate} onChange={(e) => setActivate(e.target.checked)}>
-                  {selectedApp?.approval_required ? "Submit for approval" : "Activate this policy immediately"}
-                </Checkbox>
+          <Card title="Step 5: Validate + Test With Sample Authorization Request">
+            <Space direction="vertical" size={12} style={{ width: "100%" }}>
+              <Alert
+                type={policies.length === 0 ? "warning" : "info"}
+                showIcon
+                message={
+                  policies.length === 0
+                    ? "No saved policies yet"
+                    : "Authorization test uses saved/active backend policies"
+                }
+                description={
+                  policies.length === 0
+                    ? "This test checks persisted policies in the backend. Save and activate your policy in Step 6 first, then re-run this test."
+                    : "This test does not execute the unsaved preview directly. Save/activate changes first if you expect this new policy to affect the decision."
+                }
+              />
 
-                <Button 
-                  type="primary" 
-                  onClick={onCreatePolicy} 
-                  loading={savingPolicy} 
-                  disabled={selectedAppId === "" || !name.trim() || !policyText.trim()}
-                  block
-                  size="large"
-                >
+              {builderValidationIssues.length > 0 ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="Builder validation checks"
+                  description={
+                    <ul style={{ margin: 0, paddingLeft: 20 }}>
+                      {builderValidationIssues.map((issue) => (
+                        <li key={issue}>{issue}</li>
+                      ))}
+                    </ul>
+                  }
+                />
+              ) : (
+                <Alert type="success" showIcon message="Builder validation passed." />
+              )}
+
+              <Button onClick={populateAuthorizationFromBuilder}>Use Step 2 values in test request</Button>
+
+              <Row gutter={[12, 12]}>
+                <Col xs={24} lg={8}>
+                  <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>
+                    Principal
+                  </Typography.Text>
+                  <Input value={authzPrincipal} onChange={(e) => setAuthzPrincipal(e.target.value)} placeholder="User:alice" />
+                </Col>
+                <Col xs={24} lg={8}>
+                  <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>
+                    Action
+                  </Typography.Text>
+                  <Input value={authzAction} onChange={(e) => setAuthzAction(e.target.value)} placeholder="Action:view" />
+                </Col>
+                <Col xs={24} lg={8}>
+                  <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>
+                    Resource
+                  </Typography.Text>
+                  <Input value={authzResource} onChange={(e) => setAuthzResource(e.target.value)} placeholder="Document:doc-123" />
+                </Col>
+              </Row>
+
+              <div>
+                <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>
+                  Context (JSON, optional)
+                </Typography.Text>
+                <Input.TextArea
+                  value={authzContextJson}
+                  onChange={(e) => setAuthzContextJson(e.target.value)}
+                  rows={3}
+                  placeholder='{"isBusinessHours": true, "env": "prod"}'
+                  style={{ fontFamily: "'Fira Code', 'Monaco', monospace", fontSize: 12 }}
+                />
+              </div>
+
+              <Button type="primary" icon={<ThunderboltOutlined />} onClick={onAuthorize} loading={authorizing} disabled={selectedAppId === ""}>
+                Run Authorization Test
+              </Button>
+
+              {authzResult && (
+                <Alert
+                  type={authzResult.decision === "allow" ? "success" : "error"}
+                  showIcon
+                  message={authzResult.decision === "allow" ? "Sample request ALLOWED" : "Sample request DENIED"}
+                  description={authzResult.reasons.length > 0 ? authzResult.reasons.join(" | ") : "No reasons returned."}
+                />
+              )}
+            </Space>
+          </Card>
+
+          <Card title="Step 6: Save Policy or Reusable Template">
+            <Space direction="vertical" size={12} style={{ width: "100%" }}>
+              <Row gutter={[12, 12]}>
+                <Col xs={24} lg={12}>
+                  <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>
+                    Reusable Template Name
+                  </Typography.Text>
+                  <Input value={templateName} onChange={(e) => setTemplateName(e.target.value)} placeholder="e.g., support-team-read-access" />
+                </Col>
+                <Col xs={24} lg={12}>
+                  <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>
+                    Reusable Template Description (optional)
+                  </Typography.Text>
+                  <Input value={templateDescription} onChange={(e) => setTemplateDescription(e.target.value)} placeholder="Quickly reuse this scope + conditions" />
+                </Col>
+              </Row>
+
+              {selectedApp?.approval_required && (
+                <Alert
+                  type="info"
+                  showIcon
+                  message="Approval Required"
+                  description="This application requires approval for policy changes. Checking the box below submits for approval."
+                />
+              )}
+
+              <Checkbox checked={activate} onChange={(e) => setActivate(e.target.checked)}>
+                {selectedApp?.approval_required ? "Submit for approval" : "Activate this policy immediately"}
+              </Checkbox>
+
+              <Space wrap>
+                <Button onClick={saveReusableTemplate} disabled={!templateName.trim() || !policyText.trim()}>
+                  Save Reusable Template
+                </Button>
+                <Button type="primary" onClick={onCreatePolicy} loading={savingPolicy} disabled={selectedAppId === "" || !name.trim() || !policyText.trim()}>
                   Save Policy
                 </Button>
               </Space>
-            </Card>
-          </Col>
-        </Row>
+            </Space>
+          </Card>
+        </Space>
       ),
     },
     {

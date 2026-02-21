@@ -464,6 +464,7 @@ export type BackendInstance = {
   hostname: string;
   ip_address?: string;
   status: BackendInstanceStatus;
+  requests?: number;
   cert_fingerprint?: string;
   cluster_secret_verified: boolean;
   requested_at: string;

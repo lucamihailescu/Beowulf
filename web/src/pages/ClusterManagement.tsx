@@ -268,7 +268,7 @@ export default function ClusterManagement() {
       render: (ver: string) => ver || "-",
     },
     {
-      title: "Requests",
+      title: "Decision Requests",
       dataIndex: "requests",
       key: "requests",
       render: (requests: number) => requests?.toLocaleString() || "0",
