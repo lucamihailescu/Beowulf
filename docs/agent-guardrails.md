@@ -136,6 +136,7 @@ Use existing entry points:
 - `POST /v1/entitlements`: inspect effective delegated-user capabilities for preflight UX and audit tooling.
 - `GET /v1/apps/{id}/schemas/active/metadata`: drive namespace-aware policy UI selectors for `AgentGuardrails::*` types/actions.
 - `POST /v1/apps/{id}/policies`: returns additive `validation.warnings` when policy text references unknown action/types/context for the active schema.
+- Runtime callers can use per-application API keys with `X-API-Key` (create on app onboarding, rotate/revoke with `/v1/apps/{id}/api-keys*`).
 
 ## Staged Rollout and Audit Validation
 

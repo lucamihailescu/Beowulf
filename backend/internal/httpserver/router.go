@@ -90,6 +90,17 @@ type createAppRequest struct {
 	ApprovalRequired *bool  `json:"approval_required"`
 }
 
+type createAppResponse struct {
+	ID           int64  `json:"id"`
+	APIKey       string `json:"api_key,omitempty"`
+	APIKeyID     int64  `json:"api_key_id,omitempty"`
+	APIKeyPrefix string `json:"api_key_prefix,omitempty"`
+}
+
+type createApplicationAPIKeyRequest struct {
+	Name string `json:"name"`
+}
+
 type createNamespaceRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
@@ -177,6 +188,7 @@ type API struct {
 	cfg                 config.Config
 	authzSvc            *authz.Service
 	apps                *storage.ApplicationRepo
+	appAPIKeys          *storage.ApplicationAPIKeyRepo
 	policies            *storage.PolicyRepo
 	entities            *storage.EntityRepo
 	schemas             *storage.SchemaRepo
@@ -221,7 +233,7 @@ type DBPinger interface {
 // @securityDefinitions.apikey BearerAuth
 // @in header
 // @name Authorization
-func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.ApplicationRepo, policies *storage.PolicyRepo, entities *storage.EntityRepo, schemas *storage.SchemaRepo, audits *storage.AuditRepo, namespaces *storage.NamespaceRepo, settings *storage.SettingsRepo, backendAuthRepo *storage.BackendAuthRepo, backendInstanceRepo *storage.BackendInstanceRepo, cache CacheInvalidator, cacheStore *storage.Cache, db DBPinger, instanceRegistry *storage.InstanceRegistry, simulationSvc *simulation.Service, redisClient *redis.Client) http.Handler {
+func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.ApplicationRepo, appAPIKeys *storage.ApplicationAPIKeyRepo, policies *storage.PolicyRepo, entities *storage.EntityRepo, schemas *storage.SchemaRepo, audits *storage.AuditRepo, namespaces *storage.NamespaceRepo, settings *storage.SettingsRepo, backendAuthRepo *storage.BackendAuthRepo, backendInstanceRepo *storage.BackendInstanceRepo, cache CacheInvalidator, cacheStore *storage.Cache, db DBPinger, instanceRegistry *storage.InstanceRegistry, simulationSvc *simulation.Service, redisClient *redis.Client) http.Handler {
 	// Create SSE broker for real-time event streaming
 	sseBroker := NewSSEBroker()
 
@@ -264,6 +276,7 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 		cfg:                 cfg,
 		authzSvc:            authzSvc,
 		apps:                apps,
+		appAPIKeys:          appAPIKeys,
 		policies:            policies,
 		entities:            entities,
 		schemas:             schemas,
@@ -310,6 +323,7 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 	if err != nil {
 		panic("failed to create auth middleware: " + err.Error())
 	}
+	authMiddleware.SetApplicationAPIKeyRepo(appAPIKeys)
 	api.authMiddleware = authMiddleware
 	r.Use(authMiddleware.Middleware)
 
@@ -329,6 +343,10 @@ func NewRouter(cfg config.Config, authzSvc *authz.Service, apps *storage.Applica
 		r.Get("/", api.handleListApps)
 		r.Post("/", api.handleCreateApp)
 	})
+
+	r.Get("/v1/apps/{id}/api-keys", api.handleListApplicationAPIKeys)
+	r.Post("/v1/apps/{id}/api-keys", api.handleCreateApplicationAPIKey)
+	r.Post("/v1/apps/{id}/api-keys/{keyId}/revoke", api.handleRevokeApplicationAPIKey)
 
 	r.Route("/v1/namespaces", func(r chi.Router) {
 		r.Get("/", api.handleListNamespaces)
@@ -897,6 +915,21 @@ func (a *API) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if appKey := GetApplicationAPIKeyFromContext(r.Context()); appKey != nil && appKey.ApplicationID != req.ApplicationID {
+		if a.audits != nil {
+			auditCtx := map[string]any{
+				"key_id":                 appKey.KeyID,
+				"key_prefix":             appKey.KeyPrefix,
+				"request_application_id": req.ApplicationID,
+				"bound_application_id":   appKey.ApplicationID,
+			}
+			_ = a.audits.Log(r.Context(), &req.ApplicationID, fmt.Sprintf("app-key:%d", appKey.KeyID), "application.api_key.binding_deny", "/v1/authorize", "deny", auditCtx)
+		}
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "application API key is not valid for the requested application"})
+		return
+	}
+
 	// Prepare context with cache source tracker
 	var cacheSource string = "DB" // Default if not updated
 	ctx := context.WithValue(r.Context(), storage.CtxKeyCacheSource, &cacheSource)
@@ -1008,6 +1041,20 @@ func (a *API) handleCreateApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var appKeyResp *storage.CreateApplicationAPIKeyResult
+	if a.appAPIKeys != nil {
+		actor := "api"
+		if user := GetUserFromContext(r.Context()); user != nil && user.ID != "" {
+			actor = user.ID
+		}
+		appKeyResp, err = a.appAPIKeys.CreateInitialKey(r.Context(), id, actor)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": "application created but failed to issue initial API key: " + err.Error()})
+			return
+		}
+	}
+
 	// Log application creation to audit trail
 	if a.audits != nil {
 		auditCtx := map[string]any{
@@ -1019,7 +1066,153 @@ func (a *API) handleCreateApp(w http.ResponseWriter, r *http.Request) {
 		_ = a.audits.Log(r.Context(), &id, "api", "application.create", req.Name, "", auditCtx)
 	}
 
-	json.NewEncoder(w).Encode(map[string]any{"id": id})
+	resp := createAppResponse{ID: id}
+	if appKeyResp != nil {
+		resp.APIKey = appKeyResp.PlaintextKey
+		resp.APIKeyID = appKeyResp.ID
+		resp.APIKeyPrefix = appKeyResp.KeyPrefix
+	}
+	json.NewEncoder(w).Encode(resp)
+}
+
+// @Summary List Application API Keys
+// @Description Returns API key metadata for an application (no plaintext keys)
+// @Tags Applications
+// @Produce json
+// @Security ApiKeyAuth
+// @Security BearerAuth
+// @Param id path int true "Application ID"
+// @Success 200 {array} storage.ApplicationAPIKey
+// @Failure 400 {object} map[string]string
+// @Router /v1/apps/{id}/api-keys [get]
+func (a *API) handleListApplicationAPIKeys(w http.ResponseWriter, r *http.Request) {
+	if a.appAPIKeys == nil {
+		w.WriteHeader(http.StatusNotImplemented)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "application API key store is not configured"})
+		return
+	}
+	appID, err := parseIDParam(r, "id")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid app id"})
+		return
+	}
+	items, err := a.appAPIKeys.ListKeys(r.Context(), appID)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	if items == nil {
+		items = []storage.ApplicationAPIKey{}
+	}
+	_ = json.NewEncoder(w).Encode(items)
+}
+
+// @Summary Create Application API Key
+// @Description Creates a new API key for an application and returns plaintext once
+// @Tags Applications
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Security BearerAuth
+// @Param id path int true "Application ID"
+// @Param request body createApplicationAPIKeyRequest false "Key metadata"
+// @Success 200 {object} map[string]any
+// @Failure 400 {object} map[string]string
+// @Router /v1/apps/{id}/api-keys [post]
+func (a *API) handleCreateApplicationAPIKey(w http.ResponseWriter, r *http.Request) {
+	if a.appAPIKeys == nil {
+		w.WriteHeader(http.StatusNotImplemented)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "application API key store is not configured"})
+		return
+	}
+	appID, err := parseIDParam(r, "id")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid app id"})
+		return
+	}
+
+	var req createApplicationAPIKeyRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	actor := "api"
+	if user := GetUserFromContext(r.Context()); user != nil && user.ID != "" {
+		actor = user.ID
+	}
+	created, err := a.appAPIKeys.CreateKey(r.Context(), appID, req.Name, actor)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	if a.audits != nil {
+		auditCtx := map[string]any{
+			"key_id":     created.ID,
+			"key_name":   created.Name,
+			"key_prefix": created.KeyPrefix,
+		}
+		_ = a.audits.Log(r.Context(), &appID, actor, "application.api_key.create", fmt.Sprintf("%d", created.ID), "allow", auditCtx)
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"id":         created.ID,
+		"name":       created.Name,
+		"key_prefix": created.KeyPrefix,
+		"api_key":    created.PlaintextKey,
+		"created_at": created.CreatedAt,
+	})
+}
+
+// @Summary Revoke Application API Key
+// @Description Revokes an API key for an application
+// @Tags Applications
+// @Produce json
+// @Security ApiKeyAuth
+// @Security BearerAuth
+// @Param id path int true "Application ID"
+// @Param keyId path int true "API Key ID"
+// @Success 204 "No Content"
+// @Failure 400 {object} map[string]string
+// @Router /v1/apps/{id}/api-keys/{keyId}/revoke [post]
+func (a *API) handleRevokeApplicationAPIKey(w http.ResponseWriter, r *http.Request) {
+	if a.appAPIKeys == nil {
+		w.WriteHeader(http.StatusNotImplemented)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "application API key store is not configured"})
+		return
+	}
+	appID, err := parseIDParam(r, "id")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid app id"})
+		return
+	}
+	keyID, err := parseIDParam(r, "keyId")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid key id"})
+		return
+	}
+
+	actor := "api"
+	if user := GetUserFromContext(r.Context()); user != nil && user.ID != "" {
+		actor = user.ID
+	}
+	if err := a.appAPIKeys.RevokeKey(r.Context(), appID, keyID, actor); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	if a.audits != nil {
+		auditCtx := map[string]any{
+			"key_id": keyID,
+		}
+		_ = a.audits.Log(r.Context(), &appID, actor, "application.api_key.revoke", fmt.Sprintf("%d", keyID), "allow", auditCtx)
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // @Summary List Namespaces
@@ -1904,6 +2097,22 @@ func (a *API) handleGetEntitlements(w http.ResponseWriter, r *http.Request) {
 	} else {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{"error": "application_id or application_name is required"})
+		return
+	}
+
+	if appKey := GetApplicationAPIKeyFromContext(r.Context()); appKey != nil && appKey.ApplicationID != appID {
+		if a.audits != nil {
+			auditCtx := map[string]any{
+				"key_id":                 appKey.KeyID,
+				"key_prefix":             appKey.KeyPrefix,
+				"request_application_id": appID,
+				"bound_application_id":   appKey.ApplicationID,
+				"username":               req.Username,
+			}
+			_ = a.audits.Log(r.Context(), &appID, fmt.Sprintf("app-key:%d", appKey.KeyID), "application.api_key.binding_deny", "/v1/entitlements", "deny", auditCtx)
+		}
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "application API key is not valid for the requested application"})
 		return
 	}
 

@@ -31,6 +31,8 @@ type contextKey string
 const (
 	// UserContextKey is the context key for storing user information.
 	UserContextKey contextKey = "user"
+	// ApplicationAPIKeyContextKey stores per-application API key auth metadata.
+	ApplicationAPIKeyContextKey contextKey = "application_api_key"
 )
 
 // GetUserFromContext retrieves the authenticated user from the request context.
@@ -42,6 +44,23 @@ func GetUserFromContext(ctx context.Context) *UserContext {
 	return user
 }
 
+// ApplicationAPIKeyContext contains authenticated API key metadata for runtime calls.
+type ApplicationAPIKeyContext struct {
+	KeyID         int64  `json:"key_id"`
+	ApplicationID int64  `json:"application_id"`
+	KeyPrefix     string `json:"key_prefix"`
+	Name          string `json:"name"`
+}
+
+// GetApplicationAPIKeyFromContext returns per-application API key auth metadata.
+func GetApplicationAPIKeyFromContext(ctx context.Context) *ApplicationAPIKeyContext {
+	key, ok := ctx.Value(ApplicationAPIKeyContextKey).(*ApplicationAPIKeyContext)
+	if !ok {
+		return nil
+	}
+	return key
+}
+
 // AuthMiddleware provides authentication middleware based on configuration.
 type AuthMiddleware struct {
 	mu            sync.RWMutex
@@ -50,6 +69,7 @@ type AuthMiddleware struct {
 	jwtValidator  *JWTValidator
 	kerbValidator *KerberosValidator
 	ldapSignKey   []byte // Signing key for LDAP-issued JWTs
+	appAPIKeys    *storage.ApplicationAPIKeyRepo
 }
 
 // NewAuthMiddleware creates a new authentication middleware.
@@ -76,6 +96,13 @@ func (am *AuthMiddleware) Refresh(cfg config.Config, settings *storage.SettingsR
 	am.mu.Lock()
 	defer am.mu.Unlock()
 	am.configure(cfg, settings)
+}
+
+// SetApplicationAPIKeyRepo configures per-application runtime key authentication.
+func (am *AuthMiddleware) SetApplicationAPIKeyRepo(repo *storage.ApplicationAPIKeyRepo) {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	am.appAPIKeys = repo
 }
 
 func (am *AuthMiddleware) configure(cfg config.Config, settings *storage.SettingsRepo) {
@@ -174,10 +201,12 @@ func (am *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 		am.mu.RLock()
 		mode := am.mode
 		apiKey := am.apiKey
+		appAPIKeys := am.appAPIKeys
 
 		var user *UserContext
 		var authErr error
 		var isAnonymous bool
+		var appKeyCtx *ApplicationAPIKeyContext
 
 		// Skip auth for cluster management, SSE, settings, auth config, and identity provider endpoints
 		// These are needed for: load-balancer, backend registration, dashboard, and initial setup
@@ -194,6 +223,26 @@ func (am *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 			}
 			if user == nil {
 				isAnonymous = true
+			}
+		} else if r.Header.Get("X-API-Key") != "" && (path == "/v1/authorize" || path == "/v1/entitlements") && appAPIKeys != nil {
+			key := r.Header.Get("X-API-Key")
+			appKey, err := appAPIKeys.AuthenticateKey(r.Context(), key)
+			if err != nil {
+				authErr = fmt.Errorf("invalid application API key")
+			} else if appKey == nil {
+				authErr = fmt.Errorf("invalid application API key")
+			} else {
+				user = &UserContext{
+					ID:     fmt.Sprintf("app-key:%d", appKey.ID),
+					Name:   "Application Runtime",
+					Groups: []string{"ApplicationRuntime"},
+				}
+				appKeyCtx = &ApplicationAPIKeyContext{
+					KeyID:         appKey.ID,
+					ApplicationID: appKey.ApplicationID,
+					KeyPrefix:     appKey.KeyPrefix,
+					Name:          appKey.Name,
+				}
 			}
 		} else if apiKey != "" && r.Header.Get("X-API-Key") != "" {
 			// Check for API Key Authentication
@@ -264,6 +313,9 @@ func (am *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 
 		// Add user to context
 		ctx := context.WithValue(r.Context(), UserContextKey, user)
+		if appKeyCtx != nil {
+			ctx = context.WithValue(ctx, ApplicationAPIKeyContextKey, appKeyCtx)
+		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

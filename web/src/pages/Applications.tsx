@@ -27,6 +27,13 @@ export default function Applications() {
   const [newNamespaceName, setNewNamespaceName] = useState("");
   const [newNamespaceDesc, setNewNamespaceDesc] = useState("");
   const [creatingNamespace, setCreatingNamespace] = useState(false);
+  const [newAppKeyModalOpen, setNewAppKeyModalOpen] = useState(false);
+  const [newAppCredential, setNewAppCredential] = useState<{
+    appId: number;
+    appName: string;
+    apiKey: string;
+    keyPrefix?: string;
+  } | null>(null);
 
   const [selectedAppId, setSelectedAppId] = useState<number | "">("");
   const [entityType, setEntityType] = useState("User");
@@ -90,6 +97,7 @@ export default function Applications() {
     }
     setCreatingApp(true);
     try {
+      const appName = name.trim();
       const created = await api.createApp({ name, namespace_id: selectedNamespaceId, description, approval_required: approvalRequired });
       setName("");
       setSelectedNamespaceId(undefined);
@@ -97,9 +105,19 @@ export default function Applications() {
       setApprovalRequired(false);
       setCreateStep(0);
       await refresh();
-      setNotice(`Application "${name}" created successfully.`);
-      // Navigate to the new application
-      navigate(`/applications/${created.id}`);
+      if (created.api_key) {
+        setNotice(`Application "${appName}" created. Copy the API key now — it will only be shown once.`);
+        setNewAppCredential({
+          appId: created.id,
+          appName,
+          apiKey: created.api_key,
+          keyPrefix: created.api_key_prefix,
+        });
+        setNewAppKeyModalOpen(true);
+      } else {
+        setNotice(`Application "${appName}" created successfully.`);
+        navigate(`/applications/${created.id}`);
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -514,6 +532,57 @@ export default function Applications() {
             />
           </div>
         </Space>
+      </Modal>
+
+      <Modal
+        open={newAppKeyModalOpen}
+        title="Application API Key"
+        onCancel={() => setNewAppKeyModalOpen(false)}
+        footer={
+          <Space>
+            <Button onClick={() => setNewAppKeyModalOpen(false)}>Close</Button>
+            <Button
+              type="primary"
+              onClick={() => {
+                if (newAppCredential) {
+                  navigate(`/applications/${newAppCredential.appId}`);
+                }
+                setNewAppKeyModalOpen(false);
+              }}
+            >
+              Go to Application
+            </Button>
+          </Space>
+        }
+      >
+        {!newAppCredential ? null : (
+          <Space direction="vertical" size={12} style={{ width: "100%" }}>
+            <Alert
+              type="warning"
+              showIcon
+              message="Copy this API key now"
+              description="This plaintext key will not be shown again. Store it securely in your runtime secret manager."
+            />
+            <div>
+              <Typography.Text strong>Application</Typography.Text>
+              <div>{newAppCredential.appName}</div>
+            </div>
+            <div>
+              <Typography.Text strong>Key Prefix</Typography.Text>
+              <div>
+                <Typography.Text code>{newAppCredential.keyPrefix || "—"}</Typography.Text>
+              </div>
+            </div>
+            <div>
+              <Typography.Text strong>API Key</Typography.Text>
+              <div>
+                <Typography.Text code copyable={{ text: newAppCredential.apiKey }}>
+                  {newAppCredential.apiKey}
+                </Typography.Text>
+              </div>
+            </div>
+          </Space>
+        )}
       </Modal>
     </Space>
   );

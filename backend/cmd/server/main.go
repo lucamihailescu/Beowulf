@@ -34,6 +34,7 @@ func main() {
 	defer db.Close()
 
 	appRepo := storage.NewApplicationRepo(db)
+	appAPIKeyRepo := storage.NewApplicationAPIKeyRepo(db)
 	policyRepo := storage.NewPolicyRepo(db)
 	entityRepo := storage.NewEntityRepo(db)
 	schemaRepo := storage.NewSchemaRepo(db)
@@ -120,7 +121,7 @@ func main() {
 		}
 	}()
 
-	r := httpserver.NewRouter(cfg, authzSvc, appRepo, policyRepo, entityRepo, schemaRepo, auditRepo, namespaceRepo, settingsRepo, backendAuthRepo, backendInstanceRepo, cache, cache, db, instanceRegistry, simSvc, redisClient)
+	r := httpserver.NewRouter(cfg, authzSvc, appRepo, appAPIKeyRepo, policyRepo, entityRepo, schemaRepo, auditRepo, namespaceRepo, settingsRepo, backendAuthRepo, backendInstanceRepo, cache, cache, db, instanceRegistry, simSvc, redisClient)
 
 	// Start instance registry heartbeat (after router sets the status function)
 	if instanceRegistry != nil {

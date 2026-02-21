@@ -77,6 +77,37 @@ export type CreateApplicationRequest = {
   approval_required?: boolean;
 };
 
+export type CreateApplicationResponse = {
+  id: number;
+  api_key?: string;
+  api_key_id?: number;
+  api_key_prefix?: string;
+};
+
+export type ApplicationAPIKey = {
+  id: number;
+  application_id: number;
+  name: string;
+  key_prefix: string;
+  created_by?: string;
+  created_at: string;
+  last_used_at?: string;
+  revoked_at?: string;
+  revoked_by?: string;
+};
+
+export type CreateApplicationAPIKeyRequest = {
+  name?: string;
+};
+
+export type CreateApplicationAPIKeyResponse = {
+  id: number;
+  name: string;
+  key_prefix: string;
+  api_key: string;
+  created_at: string;
+};
+
 export type EntityRef = { type: string; id: string };
 
 export type CedarEntity = {
@@ -677,10 +708,27 @@ export const api = {
     return request<Application[]>("/v1/apps/");
   },
 
-  createApp(payload: CreateApplicationRequest): Promise<{ id: number }> {
-    return request<{ id: number }>("/v1/apps/", {
+  createApp(payload: CreateApplicationRequest): Promise<CreateApplicationResponse> {
+    return request<CreateApplicationResponse>("/v1/apps/", {
       method: "POST",
       body: JSON.stringify(payload),
+    });
+  },
+
+  listApplicationAPIKeys(appId: number): Promise<ApplicationAPIKey[]> {
+    return request<ApplicationAPIKey[]>(`/v1/apps/${appId}/api-keys`);
+  },
+
+  createApplicationAPIKey(appId: number, payload: CreateApplicationAPIKeyRequest): Promise<CreateApplicationAPIKeyResponse> {
+    return request<CreateApplicationAPIKeyResponse>(`/v1/apps/${appId}/api-keys`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  revokeApplicationAPIKey(appId: number, keyId: number): Promise<void> {
+    return request<void>(`/v1/apps/${appId}/api-keys/${keyId}/revoke`, {
+      method: "POST",
     });
   },
 

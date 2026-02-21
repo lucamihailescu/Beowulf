@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { Alert, Button, Card, Checkbox, Collapse, Descriptions, Dropdown, Input, Modal, Select, Space, Table, Tag, Typography } from "antd";
 import { CheckCircleOutlined, CloseCircleOutlined, PlusOutlined, EditOutlined, DownOutlined, FileTextOutlined, ThunderboltOutlined, DeleteOutlined } from "@ant-design/icons";
-import { api, type Application, type PolicySummary, type PolicyDetails, type Schema, type AuthorizeResponse, type SchemaMetadata } from "../api";
+import { api, type Application, type ApplicationAPIKey, type PolicySummary, type PolicyDetails, type Schema, type AuthorizeResponse, type SchemaMetadata } from "../api";
 import SchemaWizard from "../components/SchemaWizard";
 import PolicyTemplateWizard from "../components/PolicyTemplateWizard";
 import { normalizeSchemaMetadata, parseSchemaMetadataFromText } from "../schemaMetadata";
@@ -14,10 +14,16 @@ export default function ApplicationDetails() {
   const [app, setApp] = useState<Application | null>(null);
   const [policies, setPolicies] = useState<PolicySummary[]>([]);
   const [schemas, setSchemas] = useState<Schema[]>([]);
+  const [apiKeys, setApiKeys] = useState<ApplicationAPIKey[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [policyValidationWarnings, setPolicyValidationWarnings] = useState<string[]>([]);
+  const [newAPIKeyName, setNewAPIKeyName] = useState("");
+  const [creatingAPIKey, setCreatingAPIKey] = useState(false);
+  const [generatedAPIKey, setGeneratedAPIKey] = useState<{ key: string; prefix: string; name: string } | null>(null);
+  const [generatedAPIKeyModalOpen, setGeneratedAPIKeyModalOpen] = useState(false);
+  const [revokingAPIKeyID, setRevokingAPIKeyID] = useState<number | null>(null);
 
   // Policy modal state
   const [selectedPolicy, setSelectedPolicy] = useState<PolicyDetails | null>(null);
@@ -172,12 +178,14 @@ export default function ApplicationDetails() {
         const found = apps.find((a) => a.id === appId) || null;
         setApp(found);
         if (found) {
-          const [policiesData, schemasData] = await Promise.all([
+          const [policiesData, schemasData, appKeysData] = await Promise.all([
             api.listPolicies(appId),
             api.listSchemas(appId).catch(() => []),
+            api.listApplicationAPIKeys(appId).catch(() => []),
           ]);
           setPolicies(policiesData);
           setSchemas(schemasData);
+          setApiKeys(appKeysData);
         }
       } catch (e) {
         setError((e as Error).message);
@@ -377,6 +385,46 @@ export default function ApplicationDetails() {
     }
   }
 
+  async function onCreateApplicationAPIKey() {
+    setError("");
+    setNotice("");
+    setCreatingAPIKey(true);
+    try {
+      const created = await api.createApplicationAPIKey(appId, {
+        name: newAPIKeyName.trim() || undefined,
+      });
+      setGeneratedAPIKey({
+        key: created.api_key,
+        prefix: created.key_prefix,
+        name: created.name,
+      });
+      setGeneratedAPIKeyModalOpen(true);
+      setNewAPIKeyName("");
+      setApiKeys(await api.listApplicationAPIKeys(appId));
+      setNotice(`API key "${created.name}" created. Copy it now — it will only be shown once.`);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setCreatingAPIKey(false);
+    }
+  }
+
+  async function onRevokeApplicationAPIKey(key: ApplicationAPIKey) {
+    if (!confirm(`Revoke API key "${key.name}" (${key.key_prefix})?`)) return;
+    setError("");
+    setNotice("");
+    setRevokingAPIKeyID(key.id);
+    try {
+      await api.revokeApplicationAPIKey(appId, key.id);
+      setApiKeys(await api.listApplicationAPIKeys(appId));
+      setNotice(`API key "${key.name}" revoked.`);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRevokingAPIKeyID(null);
+    }
+  }
+
   // Helper to build schema JSON for a target namespace while preserving other namespaces.
   function buildSchemaJson(entityTypes: string[], actions: string[], namespace: string): string {
     const entityTypesObj: Record<string, object> = {};
@@ -498,6 +546,78 @@ export default function ApplicationDetails() {
           <Typography.Text type="secondary">No application found.</Typography.Text>
         )}
       </Card>
+
+      <Card
+        title="API Keys"
+        loading={loading}
+        extra={
+          <Space>
+            <Input
+              placeholder="Key name (optional)"
+              value={newAPIKeyName}
+              onChange={(e) => setNewAPIKeyName(e.target.value)}
+              style={{ width: 220 }}
+            />
+            <Button type="primary" icon={<PlusOutlined />} loading={creatingAPIKey} onClick={onCreateApplicationAPIKey}>
+              Create Key
+            </Button>
+          </Space>
+        }
+      >
+        <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
+          Runtime clients should use these keys with <Typography.Text code>X-API-Key</Typography.Text> when calling authorization endpoints.
+        </Typography.Paragraph>
+        <Table
+          rowKey="id"
+          dataSource={apiKeys}
+          pagination={false}
+          locale={{ emptyText: "No API keys created yet." }}
+          columns={[
+            { title: "Name", dataIndex: "name" },
+            {
+              title: "Prefix",
+              dataIndex: "key_prefix",
+              render: (v: string) => <Typography.Text code>{v}</Typography.Text>,
+            },
+            {
+              title: "Status",
+              key: "status",
+              width: 140,
+              render: (_: any, record: ApplicationAPIKey) =>
+                record.revoked_at ? <Tag color="red">Revoked</Tag> : <Tag color="green">Active</Tag>,
+            },
+            {
+              title: "Last Used",
+              dataIndex: "last_used_at",
+              width: 180,
+              render: (v?: string) => (v ? new Date(v).toLocaleString() : "—"),
+            },
+            {
+              title: "Created",
+              dataIndex: "created_at",
+              width: 180,
+              render: (v: string) => (v ? new Date(v).toLocaleString() : "—"),
+            },
+            {
+              title: "Actions",
+              key: "actions",
+              width: 120,
+              render: (_: any, record: ApplicationAPIKey) =>
+                record.revoked_at ? null : (
+                  <Button
+                    size="small"
+                    danger
+                    loading={revokingAPIKeyID === record.id}
+                    onClick={() => onRevokeApplicationAPIKey(record)}
+                  >
+                    Revoke
+                  </Button>
+                ),
+            },
+          ]}
+        />
+      </Card>
+
       <Card
         title="Policies"
         loading={loading}
@@ -1150,6 +1270,46 @@ permit (
         actions={schemaActions.length > 0 ? schemaActions : commonActions}
         actionRefs={schemaActionRefs}
       />
+
+      <Modal
+        open={generatedAPIKeyModalOpen}
+        title="New API Key"
+        onCancel={() => setGeneratedAPIKeyModalOpen(false)}
+        footer={
+          <Button type="primary" onClick={() => setGeneratedAPIKeyModalOpen(false)}>
+            Done
+          </Button>
+        }
+      >
+        {!generatedAPIKey ? null : (
+          <Space direction="vertical" size={12} style={{ width: "100%" }}>
+            <Alert
+              type="warning"
+              showIcon
+              message="Copy this key now"
+              description="For security reasons, the plaintext key is only shown once."
+            />
+            <div>
+              <Typography.Text strong>Name</Typography.Text>
+              <div>{generatedAPIKey.name}</div>
+            </div>
+            <div>
+              <Typography.Text strong>Prefix</Typography.Text>
+              <div>
+                <Typography.Text code>{generatedAPIKey.prefix}</Typography.Text>
+              </div>
+            </div>
+            <div>
+              <Typography.Text strong>API Key</Typography.Text>
+              <div>
+                <Typography.Text code copyable={{ text: generatedAPIKey.key }}>
+                  {generatedAPIKey.key}
+                </Typography.Text>
+              </div>
+            </div>
+          </Space>
+        )}
+      </Modal>
     </Space>
   );
 }
