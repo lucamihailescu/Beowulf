@@ -823,6 +823,56 @@ Requirements:
   - `CEDAR_BEARER_TOKEN=<access-token>` (recommended)
   - `CEDAR_API_KEY=<api-key>` (read-only key, insufficient for bootstrap writes)
 
+## Atomic Agents + FastMCP Demo Tests
+
+This repository includes a Python integration suite to demonstrate agent-style authorization decisions using:
+
+- Atomic Agents as the agent orchestration layer.
+- FastMCP as the MCP server/tool runtime.
+- The existing Cedar Python SDK (`clients/python/mcp`) as the decision client for `/v1/authorize`.
+
+### Test Artifacts
+
+- `tests/python/demo_fastmcp_server.py`
+- `tests/python/demo_atomic_agent_client.py`
+- `tests/python/test_atomic_agents_fastmcp_demo.py`
+
+### Authorization Model Used in the Demo
+
+The demo uses two authorization layers:
+
+1. **FastMCP async auth checks** gate MCP tool access before tool execution.
+2. **Tool-level Cedar decisioning** returns explicit `approve`/`deny` based on SDK-backed authorization checks.
+
+This allows tests to validate both:
+
+- **auth-layer deny** (blocked by FastMCP auth check), and
+- **decision-layer deny** (tool runs but Cedar decision is deny).
+
+### Transport Note for FastMCP Auth Checks
+
+FastMCP token-based authorization checks are transport-dependent. For auth-check coverage, run the MCP demo server over HTTP transport. In STDIO mode, token-based checks are typically skipped.
+
+### Running the Suite
+
+```bash
+# Run only the Atomic Agents + FastMCP demo integration script
+python3 tests/python/test_atomic_agents_fastmcp_demo.py
+
+# Or run all Python integration scripts (including this suite)
+cd tests/python
+./run.sh
+```
+
+### Expected Environment Inputs
+
+- `CEDAR_BASE_URL` (default: `http://localhost:8080`)
+- app binding (`CEDAR_APP_ID` or test-configured app id)
+- Cedar runtime auth header strategy (for example per-app runtime `X-API-Key`)
+- `FASTMCP_DEMO_URL` (default: `http://127.0.0.1:8765/mcp`)
+- `FASTMCP_DEMO_AUTO_START` (default: `true`) to auto-launch the demo FastMCP server from the test script
+- optional LLM provider credentials (`OPENAI_API_KEY`) for live-agent execution; when not present, live-LLM cases are skipped and deterministic MCP/SDK checks still run.
+
 ## License
 
 This project is licensed under the Apache-2.0 License.

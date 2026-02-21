@@ -9,11 +9,14 @@ Test script for load balancing and high availability features:
 
 import argparse
 import json
+import os
 import requests
 import sys
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from beowulf_sdk_loader import Beowulf, BeowulfAPIError
 
 # Default to load balancer port (nginx)
 BASE_URL = "http://localhost:5173/api"
@@ -52,6 +55,20 @@ def request_with_retry(method, url, **kwargs):
             raise
     
     return resp  # Return last response even if rate limited
+
+
+def build_runtime_client(base_url: str, app_id: int) -> Beowulf:
+    token = os.getenv("CEDAR_APP_API_KEY") or os.getenv("CEDAR_API_KEY")
+    headers: dict[str, str] = {}
+    if os.getenv("CEDAR_BEARER_TOKEN"):
+        headers["Authorization"] = f"Bearer {os.getenv('CEDAR_BEARER_TOKEN')}"
+    return Beowulf(
+        token=token,
+        pdp=base_url,
+        application_id=app_id,
+        timeout=5.0,
+        headers=headers,
+    )
 
 
 def test_cluster_instances():
@@ -289,42 +306,53 @@ def test_authorization_across_instances(num_requests=20):
     app_id = app["id"]
     print(f"  Using app: {app['name']} (ID: {app_id})")
     
-    auth_payload = {
-        "application_id": app_id,
-        "principal": {"type": "User", "id": "alice"},
-        "action": {"type": "Action", "id": "view"},
-        "resource": {"type": "Document", "id": "test-doc"},
-        "context": {}
-    }
-    
     results = {"allow": 0, "deny": 0, "error": 0}
     instance_hits = Counter()
+    lb_client = build_runtime_client(BASE_URL, app_id)
+    direct_client = build_runtime_client(DIRECT_API_URL, app_id)
     
     def make_auth_request(i):
         try:
             # Small delay to avoid rate limiting
             time.sleep(0.1)
             
-            # Make auth request
-            resp = request_with_retry("POST", f"{BASE_URL}/v1/authorize", json=auth_payload, timeout=5)
-            
             # Also get instance ID from cluster status
             status_resp = request_with_retry("GET", f"{BASE_URL}/v1/cluster/status", timeout=5)
             instance_id = status_resp.json().get("instance_id", "unknown") if status_resp.ok else "unknown"
             
-            if resp.ok:
-                decision = resp.json().get("decision", "unknown")
-                return decision, instance_id, None
-            elif resp.status_code == 429:
-                return "error", instance_id, "Rate limited"
-            else:
-                return "error", instance_id, f"HTTP {resp.status_code}"
+            allowed = lb_client.check_sync(
+                user="alice",
+                action="view",
+                resource={"type": "Document", "id": "test-doc"},
+            )
+            decision = "allow" if allowed else "deny"
+            return decision, instance_id, None
+        except BeowulfAPIError as exc:
+            status_code = int(exc.status_code or 0)
+            if status_code == 429:
+                return "error", "unknown", "Rate limited"
+            if status_code == 0:
+                try:
+                    allowed = direct_client.check_sync(
+                        user="alice",
+                        action="view",
+                        resource={"type": "Document", "id": "test-doc"},
+                    )
+                    decision = "allow" if allowed else "deny"
+                    return decision, "direct", None
+                except Exception:
+                    pass
+            return "error", "unknown", f"HTTP {status_code}"
         except requests.exceptions.ConnectionError:
             try:
-                resp = request_with_retry("POST", f"{DIRECT_API_URL}/v1/authorize", json=auth_payload, timeout=5)
-                if resp.ok:
-                    return resp.json().get("decision", "unknown"), "direct", None
-            except:
+                allowed = direct_client.check_sync(
+                    user="alice",
+                    action="view",
+                    resource={"type": "Document", "id": "test-doc"},
+                )
+                decision = "allow" if allowed else "deny"
+                return decision, "direct", None
+            except Exception:
                 pass
             return "error", "unknown", "Connection error"
         except Exception as e:
@@ -342,34 +370,38 @@ def test_authorization_across_instances(num_requests=20):
             print(f"    Progress: {i + 1}/{num_requests}")
     
     # Report results
-    print(f"\n  Authorization Results:")
-    for decision, count in sorted(results.items(), key=lambda x: -x[1]):
-        if count > 0:
-            icon = "✓" if decision == "allow" else "✗" if decision == "deny" else "⚠"
-            print(f"    {icon} {decision}: {count}")
-    
-    print(f"\n  Instance Distribution:")
-    for instance_id, count in sorted(instance_hits.items(), key=lambda x: -x[1]):
-        print(f"    {instance_id}: {count}")
-    
-    # Check consistency - all non-error results should be the same decision
-    # Filter out keys with 0 values and error/unknown keys
-    non_error_results = {k: v for k, v in results.items() if k not in ("error", "unknown") and v > 0}
-    
-    error_rate = results.get("error", 0) / num_requests * 100
-    if error_rate > 10:
-        print(f"\n  ⚠ High error rate: {error_rate:.1f}%")
-        return error_rate < 50  # Pass if less than 50% errors
-    
-    # If we have both allow and deny results with actual counts, that's inconsistent
-    if len(non_error_results) > 1:
-        print(f"\n  ⚠ Inconsistent authorization decisions across instances!")
-        for decision, count in non_error_results.items():
-            print(f"      {decision}: {count}")
-        return False
-    
-    print(f"\n  ✓ Consistent authorization across instances")
-    return True
+    try:
+        print(f"\n  Authorization Results:")
+        for decision, count in sorted(results.items(), key=lambda x: -x[1]):
+            if count > 0:
+                icon = "✓" if decision == "allow" else "✗" if decision == "deny" else "⚠"
+                print(f"    {icon} {decision}: {count}")
+        
+        print(f"\n  Instance Distribution:")
+        for instance_id, count in sorted(instance_hits.items(), key=lambda x: -x[1]):
+            print(f"    {instance_id}: {count}")
+        
+        # Check consistency - all non-error results should be the same decision
+        # Filter out keys with 0 values and error/unknown keys
+        non_error_results = {k: v for k, v in results.items() if k not in ("error", "unknown") and v > 0}
+        
+        error_rate = results.get("error", 0) / num_requests * 100
+        if error_rate > 10:
+            print(f"\n  ⚠ High error rate: {error_rate:.1f}%")
+            return error_rate < 50  # Pass if less than 50% errors
+        
+        # If we have both allow and deny results with actual counts, that's inconsistent
+        if len(non_error_results) > 1:
+            print(f"\n  ⚠ Inconsistent authorization decisions across instances!")
+            for decision, count in non_error_results.items():
+                print(f"      {decision}: {count}")
+            return False
+        
+        print(f"\n  ✓ Consistent authorization across instances")
+        return True
+    finally:
+        lb_client.close()
+        direct_client.close()
 
 
 def test_sse_per_instance():

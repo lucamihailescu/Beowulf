@@ -2,6 +2,8 @@ import requests
 import json
 import time
 
+from beowulf_sdk_loader import Beowulf, BeowulfAPIError
+
 BASE_URL = "http://localhost:8080"
 
 def get_app_id():
@@ -17,11 +19,18 @@ def test_authorize_cache(app_id=None, principal_id="alice", action_id="view", re
     if app_id is None:
         app_id = get_app_id()
     print(f"Using App ID: {app_id}")
-
-    auth_url = f"{BASE_URL}/v1/authorize"
+    token = None
+    import os
+    if os.getenv("CEDAR_APP_API_KEY"):
+        token = os.getenv("CEDAR_APP_API_KEY")
+    elif os.getenv("CEDAR_API_KEY"):
+        token = os.getenv("CEDAR_API_KEY")
+    headers: dict[str, str] = {}
+    if os.getenv("CEDAR_BEARER_TOKEN"):
+        headers["Authorization"] = f"Bearer {os.getenv('CEDAR_BEARER_TOKEN')}"
+    client = Beowulf(token=token, pdp=BASE_URL, application_id=int(app_id), headers=headers, timeout=5.0)
     
     payload = {
-        "application_id": int(app_id),
         "principal": {"type": "User", "id": principal_id},
         "action": {"type": "Action", "id": action_id},
         "resource": {"type": "Document", "id": resource_id},
@@ -33,7 +42,7 @@ def test_authorize_cache(app_id=None, principal_id="alice", action_id="view", re
     # Phase 1: Warm up and verify L1
     print("\n[Phase 1] Warming Cache...")
     for i in range(1, 4):
-        make_auth_request(auth_url, payload, f"Warm-up {i}")
+        make_auth_request(client, payload, f"Warm-up {i}")
         time.sleep(0.1)
 
     # Phase 2: Update Policy to trigger invalidation
@@ -60,7 +69,7 @@ def test_authorize_cache(app_id=None, principal_id="alice", action_id="view", re
     # Phase 3: Verify Cache Miss (DB Hit) then Re-warm (L1)
     print("\n[Phase 3] Verifying Invalidation & Re-warming...")
     for i in range(1, 4):
-        make_auth_request(auth_url, payload, f"Post-Update {i}")
+        make_auth_request(client, payload, f"Post-Update {i}")
         time.sleep(0.1)
 
     # Cleanup
@@ -75,19 +84,22 @@ def test_authorize_cache(app_id=None, principal_id="alice", action_id="view", re
                 print(f" -> Delete failed: {del_resp.status_code} {del_resp.text}")
         except Exception as e:
             print(f" -> Delete failed with exception: {e}")
+    client.close()
 
-def make_auth_request(url, payload, label):
+def make_auth_request(client: Beowulf, payload: dict, label: str):
     try:
         start_time = time.time()
-        response = requests.post(url, json=payload)
+        decision, headers = client.authorize_with_metadata_sync(
+            user=payload["principal"],
+            action=payload["action"],
+            resource=payload["resource"],
+            context=payload.get("context", {}),
+        )
         latency = (time.time() - start_time) * 1000 # ms
-        
-        if response.status_code == 200:
-            cache_source = response.headers.get("X-Cedar-Cache", "Unknown")
-            print(f" {label}: Status=200, Cache={cache_source}, Latency={latency:.2f}ms")
-        else:
-            print(f" {label}: Error {response.status_code} - {response.text}")
-            
+        cache_source = headers.get("x-cedar-cache") or headers.get("X-Cedar-Cache", "Unknown")
+        print(f" {label}: Status=200, Decision={decision.decision}, Cache={cache_source}, Latency={latency:.2f}ms")
+    except BeowulfAPIError as e:
+        print(f" {label}: Error {e.status_code} - {e.response_body}")
     except Exception as e:
         print(f" {label}: Failed - {e}")
 

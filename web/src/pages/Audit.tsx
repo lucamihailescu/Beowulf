@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Alert, Button, Card, Input, Pagination, Select, Space, Table, Tag, Typography } from "antd";
-import { ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+import { ReloadOutlined } from "@ant-design/icons";
 import { api, type Application, type AuditLog } from "../api";
 
 export default function Audit() {
@@ -155,21 +155,29 @@ export default function Audit() {
 
   const actionOptions = [
     { value: "", label: "All actions" },
-    { value: "authorize", label: "Authorization" },
-    { value: "auth.entra.login", label: "Login (Entra)" },
-    { value: "auth.ldap.login", label: "Login (LDAP)" },
-    { value: "auth.kerberos.login", label: "Login (Kerberos)" },
-    { value: "policy.create", label: "Policy Created" },
-    { value: "entity.upsert", label: "Entity Updated" },
-    { value: "schema.create", label: "Schema Created" },
-    { value: "schema.activate", label: "Schema Activated" },
-    { value: "mcp.gateway.register", label: "MCP Gateway Registered" },
-    { value: "mcp.gateway.decision", label: "MCP Tool Decision" },
-    { value: "mcp.approval.create", label: "MCP Approval Requested" },
-    { value: "mcp.approval.approve", label: "MCP Approval Approved" },
-    { value: "mcp.approval.reject", label: "MCP Approval Rejected" },
-    { value: "mcp.delegation.create", label: "MCP Delegation Created" },
-    { value: "mcp.delegation.revoke", label: "MCP Delegation Revoked" },
+    { value: "authorize", label: "authorize - Authorization" },
+    { value: "auth.entra.login", label: "auth.entra.login - Login (Entra)" },
+    { value: "auth.ldap.login", label: "auth.ldap.login - Login (LDAP)" },
+    { value: "auth.kerberos.login", label: "auth.kerberos.login - Login (Kerberos)" },
+    { value: "policy.create", label: "policy.create - Policy Created" },
+    { value: "entity.upsert", label: "entity.upsert - Entity Updated" },
+    { value: "schema.create", label: "schema.create - Schema Created" },
+    { value: "schema.activate", label: "schema.activate - Schema Activated" },
+    { value: "mcp.gateway.register", label: "mcp.gateway.register - MCP Gateway Registered" },
+    { value: "mcp.gateway.approve", label: "mcp.gateway.approve - MCP Gateway Approved" },
+    { value: "mcp.gateway.reject", label: "mcp.gateway.reject - MCP Gateway Rejected" },
+    { value: "mcp.gateway.suspend", label: "mcp.gateway.suspend - MCP Gateway Suspended" },
+    { value: "mcp.gateway.unsuspend", label: "mcp.gateway.unsuspend - MCP Gateway Unsuspended" },
+    { value: "mcp.gateway.delete", label: "mcp.gateway.delete - MCP Gateway Deleted" },
+    { value: "mcp.gateway.pending_approval", label: "mcp.gateway.pending_approval - MCP Pending Approval" },
+    { value: "mcp.gateway.downstream_error", label: "mcp.gateway.downstream_error - MCP Downstream Error" },
+    { value: "mcp.gateway.decision", label: "mcp.gateway.decision - MCP Tool Decision" },
+    { value: "mcp.approval.create", label: "mcp.approval.create - MCP Approval Requested" },
+    { value: "mcp.approval.approve", label: "mcp.approval.approve - MCP Approval Approved" },
+    { value: "mcp.approval.reject", label: "mcp.approval.reject - MCP Approval Rejected" },
+    { value: "mcp.approval.expire", label: "mcp.approval.expire - MCP Approval Expired" },
+    { value: "mcp.delegation.create", label: "mcp.delegation.create - MCP Delegation Created" },
+    { value: "mcp.delegation.revoke", label: "mcp.delegation.revoke - MCP Delegation Revoked" },
   ];
 
   const decisionOptions = [
@@ -206,12 +214,14 @@ export default function Audit() {
           />
           <Select
             placeholder="Action"
-            style={{ width: 160 }}
+            style={{ width: 320 }}
             value={actionFilter}
             onChange={(v) => {
               setActionFilter(v);
               setPage(1);
             }}
+            showSearch
+            optionFilterProp="label"
             options={actionOptions}
           />
           <Select

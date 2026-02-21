@@ -16,6 +16,8 @@ from pathlib import Path
 
 import requests
 
+from beowulf_sdk_loader import Beowulf, BeowulfAPIError
+
 
 def _require(value: str | None, flag: str) -> str:
     if value and value.strip():
@@ -46,18 +48,46 @@ def _load_cases(path: str) -> list[dict]:
     return data
 
 
-def _authorize(base_url: str, app_api_key: str, payload: dict, timeout: float) -> tuple[int, dict]:
-    resp = requests.post(
-        f"{base_url.rstrip('/')}/v1/authorize",
-        json=payload,
-        headers={"X-API-Key": app_api_key},
+def _build_client(base_url: str, app_api_key: str, app_id: int, timeout: float) -> Beowulf:
+    headers: dict[str, str] = {}
+    if os.getenv("CEDAR_BEARER_TOKEN"):
+        headers["Authorization"] = f"Bearer {os.getenv('CEDAR_BEARER_TOKEN')}"
+    return Beowulf(
+        token=app_api_key,
+        pdp=base_url,
+        application_id=app_id,
         timeout=timeout,
+        headers=headers,
     )
+
+
+def _authorize(client: Beowulf, payload: dict) -> tuple[int, dict]:
     try:
-        body = resp.json()
-    except ValueError:
-        body = {"raw": resp.text}
-    return resp.status_code, body
+        decision = client.authorize_sync(
+            user=payload["principal"],
+            action=payload["action"],
+            resource=payload["resource"],
+            context=payload.get("context", {}),
+            application_id=int(payload["application_id"]),
+        )
+        body = {
+            "decision": decision.decision,
+            "reasons": decision.reasons,
+            "errors": decision.errors,
+        }
+        return 200, body
+    except BeowulfAPIError as exc:
+        status = int(exc.status_code or 0)
+        parsed: dict
+        if exc.response_body:
+            try:
+                raw = json.loads(exc.response_body)
+                parsed = raw if isinstance(raw, dict) else {"raw": exc.response_body}
+            except Exception:
+                parsed = {"raw": exc.response_body}
+        else:
+            parsed = {"error": str(exc)}
+        return status, parsed
 
 
 def _print_json(data: dict) -> None:
@@ -83,7 +113,9 @@ def _run_single(args: argparse.Namespace) -> int:
         "context": context,
     }
 
-    status_code, body = _authorize(args.base_url, app_api_key, payload, args.timeout)
+    client = _build_client(args.base_url, app_api_key, app_id, args.timeout)
+    status_code, body = _authorize(client, payload)
+    client.close()
     decision = str(body.get("decision", "")).lower()
     reasons = body.get("reasons", [])
     errors = body.get("errors", [])
@@ -133,6 +165,8 @@ def _run_cases(args: argparse.Namespace) -> int:
     cases = _load_cases(args.cases_file)
     failures: list[str] = []
     results: list[dict] = []
+    default_app_id = int(args.app_id) if args.app_id else None
+    client = _build_client(args.base_url, app_api_key, default_app_id or 1, args.timeout)
 
     for idx, case in enumerate(cases, 1):
         if not isinstance(case, dict):
@@ -162,8 +196,22 @@ def _run_cases(args: argparse.Namespace) -> int:
                 }
             )
             continue
+        if "application_id" not in payload:
+            if default_app_id is None:
+                failures.append(f"{name}: missing application_id and no --app-id provided")
+                results.append(
+                    {
+                        "index": idx,
+                        "name": name,
+                        "ok": False,
+                        "error": "missing application_id and no --app-id provided",
+                        "expected": expected,
+                    }
+                )
+                continue
+            payload["application_id"] = default_app_id
 
-        status_code, body = _authorize(args.base_url, app_api_key, payload, args.timeout)
+        status_code, body = _authorize(client, payload)
         decision = str(body.get("decision", "")).lower()
         expected_norm = str(expected).lower() if expected is not None else None
         http_ok = status_code == 200
@@ -213,13 +261,16 @@ def _run_cases(args: argparse.Namespace) -> int:
                 "failures": failures,
             }
         )
+        client.close()
         return 0 if not failures else 2
 
     if failures:
         print("\nBatch failures:")
         for f in failures:
             print(f"- {f}")
+        client.close()
         return 2
+    client.close()
     print("\nAll batch cases passed.")
     return 0
 

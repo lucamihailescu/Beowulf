@@ -12,6 +12,8 @@ import sys
 import threading
 import time
 
+from beowulf_sdk_loader import Beowulf
+
 BASE_URL = "http://localhost:8080"
 MCP_GATEWAY_URL = "http://localhost:8090"
 
@@ -191,41 +193,46 @@ def test_sse_endpoint():
 
 
 def test_mcp_sdk():
-    """Test the MCP SDK (requires the SDK to be importable)."""
-    print("\n=== Testing MCP SDK ===")
+    """Test the Beowulf SDK (authorization + entitlements)."""
+    print("\n=== Testing Beowulf SDK ===")
     
     try:
-        # Add clients to path
-        import os
-        sdk_path = os.path.join(os.path.dirname(__file__), "..", "..", "clients", "python")
-        sys.path.insert(0, sdk_path)
-        
-        from mcp import CedarMCPAuthorizer, CedarMCPConfig
         print("[Test 1] SDK imports successfully")
-        print("  ✓ CedarMCPAuthorizer imported")
-        print("  ✓ CedarMCPConfig imported")
+        print("  ✓ Beowulf imported")
+
+        app = _get_first_app()
+        if not app:
+            print("  ✗ No app found. Please run seed first.")
+            return False
+        app_id = int(app["id"])
         
-        # Create config
-        config = CedarMCPConfig(
-            cedar_url=BASE_URL,
-            app_id=1,
-            cache_ttl_seconds=30,
-            enable_sse=False  # Disable for quick test
+        token = None
+        headers: dict[str, str] = {}
+        import os
+        if os.getenv("CEDAR_APP_API_KEY"):
+            token = os.getenv("CEDAR_APP_API_KEY")
+        elif os.getenv("CEDAR_API_KEY"):
+            token = os.getenv("CEDAR_API_KEY")
+        if os.getenv("CEDAR_BEARER_TOKEN"):
+            headers["Authorization"] = f"Bearer {os.getenv('CEDAR_BEARER_TOKEN')}"
+
+        client = Beowulf(
+            token=token,
+            pdp=BASE_URL,
+            application_id=app_id,
+            timeout=5.0,
+            headers=headers,
         )
         print("\n[Test 2] Config created successfully")
-        
-        # Create authorizer
-        authorizer = CedarMCPAuthorizer(config)
-        print("  ✓ Authorizer initialized")
+        print("  ✓ Beowulf client initialized")
         
         # Test authorization check
         print("\n[Test 3] Testing authorization check...")
         try:
-            result = authorizer.authorize(
-                user_id="alice",
+            result = client.check_sync(
+                user="alice",
                 action="view",
-                resource_type="Document",
-                resource_id="test-doc"
+                resource={"type": "Document", "id": "test-doc"},
             )
             print(f"  ✓ Authorization check returned: {result}")
         except Exception as e:
@@ -234,25 +241,32 @@ def test_mcp_sdk():
         # Test entitlements
         print("\n[Test 4] Testing entitlements lookup...")
         try:
-            entitlements = authorizer.get_user_entitlements("alice", groups=["analysts"])
+            entitlements = client.get_entitlements_sync("alice", groups=["analysts"])
             print(f"  ✓ Entitlements received: {len(entitlements.get('entitlements', []))} entries")
         except Exception as e:
             print(f"  ! Entitlements lookup: {e}")
         
-        # Test cache stats
-        print("\n[Test 5] Testing cache stats...")
-        stats = authorizer.cache_stats
-        print(f"  ✓ Cache stats: hits={stats.get('hits', 0)}, misses={stats.get('misses', 0)}")
+        # Test repeatability of check calls
+        print("\n[Test 5] Testing repeated check...")
+        try:
+            _ = client.check_sync(
+                user="alice",
+                action="view",
+                resource={"type": "Document", "id": "test-doc"},
+            )
+            print("  ✓ Repeated check completed")
+        except Exception as e:
+            print(f"  ! Repeated check: {e}")
         
         # Cleanup
-        authorizer.close()
-        print("\n  ✓ Authorizer closed")
+        client.close()
+        print("\n  ✓ Beowulf client closed")
         
         return True
         
     except ImportError as e:
         print(f"  ✗ SDK import failed: {e}")
-        print("    Make sure 'requests' is installed")
+        print("    Make sure SDK dependencies are installed")
         return False
     except Exception as e:
         print(f"  ✗ SDK test failed: {e}")

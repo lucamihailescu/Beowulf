@@ -31,3 +31,6 @@ python test_load_balancing.py
 echo "Running MCP Integration tests..."
 python test_mcp_integration.py
 
+echo "Running Atomic Agents + FastMCP demo tests..."
+python test_atomic_agents_fastmcp_demo.py
+

@@ -14,6 +14,8 @@ from pathlib import Path
 
 import requests
 
+from beowulf_sdk_loader import Beowulf, BeowulfAPIError
+
 BASE_URL = os.getenv("CEDAR_BASE_URL", "http://localhost:8080")
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = ROOT / "examples" / "agent-guardrails" / "schema" / "agent-tools.schema.json"
@@ -104,16 +106,38 @@ def install_entities(app_id: int) -> None:
             raise RuntimeError(f"entity upsert failed for {payload['type']}::{payload['id']}: {resp.text}")
 
 
-def authorize(app_id: int, payload: dict) -> str:
-    payload = dict(payload)
-    payload["application_id"] = app_id
-    resp = SESSION.post(f"{BASE_URL}/v1/authorize", json=payload, timeout=10)
-    resp.raise_for_status()
-    body = resp.json()
-    return body.get("decision", "").lower()
+def build_runtime_client(app_id: int) -> Beowulf:
+    token = os.getenv("CEDAR_APP_API_KEY") or os.getenv("CEDAR_API_KEY")
+    headers: dict[str, str] = {}
+    if os.getenv("CEDAR_BEARER_TOKEN"):
+        headers["Authorization"] = f"Bearer {os.getenv('CEDAR_BEARER_TOKEN')}"
+    return Beowulf(
+        token=token,
+        pdp=BASE_URL,
+        application_id=app_id,
+        timeout=10.0,
+        headers=headers,
+    )
 
 
-def run_cases(app_id: int) -> None:
+def authorize(client: Beowulf, payload: dict) -> str:
+    principal = payload["principal"]
+    action = payload["action"]
+    resource = payload["resource"]
+    context = payload.get("context", {})
+    try:
+        decision = client.authorize_sync(
+            user={"type": principal["type"], "id": principal["id"]},
+            action={"type": action["type"], "id": action["id"]},
+            resource={"type": resource["type"], "id": resource["id"]},
+            context=context,
+        )
+    except BeowulfAPIError as exc:
+        raise RuntimeError(f"authorize failed: HTTP {exc.status_code} {exc.response_body}") from exc
+    return decision.decision
+
+
+def run_cases(client: Beowulf) -> None:
     now = int(time.time())
     cases = [
         {
@@ -255,7 +279,7 @@ def run_cases(app_id: int) -> None:
 
     failures = []
     for case in cases:
-        decision = authorize(app_id, case["payload"])
+        decision = authorize(client, case["payload"])
         passed = decision == case["expected"]
         status = "PASS" if passed else "FAIL"
         print(f"[{status}] {case['name']}: expected={case['expected']} got={decision}")
@@ -287,7 +311,11 @@ def main() -> None:
     assert_policy_validation_warnings(app_id)
     install_policies(app_id)
     install_entities(app_id)
-    run_cases(app_id)
+    client = build_runtime_client(app_id)
+    try:
+        run_cases(client)
+    finally:
+        client.close()
     print("All guardrails cases passed.")
 
 

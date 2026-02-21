@@ -13,6 +13,8 @@ import os
 import time
 import requests
 
+from beowulf_sdk_loader import Beowulf, BeowulfAPIError
+
 BASE_URL = os.getenv("CEDAR_BASE_URL", "http://localhost:8080")
 
 SESSION = requests.Session()
@@ -47,32 +49,39 @@ def create_app_with_key(namespace_id: int) -> dict:
     return resp.json()
 
 
-def authorize_with_key(raw_key: str, application_id: int) -> requests.Response:
-    payload = {
-        "application_id": application_id,
-        "principal": {"type": "User", "id": "alice"},
-        "action": {"type": "Action", "id": "view"},
-        "resource": {"type": "Document", "id": "doc-1"},
-    }
-    return requests.post(
-        f"{BASE_URL}/v1/authorize",
-        json=payload,
-        headers={"X-API-Key": raw_key},
-        timeout=10,
+def _build_runtime_client(raw_key: str, application_id: int) -> Beowulf:
+    return Beowulf(
+        token=raw_key,
+        pdp=BASE_URL,
+        application_id=application_id,
+        timeout=10.0,
     )
 
 
-def entitlements_with_key(raw_key: str, application_id: int) -> requests.Response:
-    payload = {
-        "application_id": application_id,
-        "username": "alice",
-    }
-    return requests.post(
-        f"{BASE_URL}/v1/entitlements",
-        json=payload,
-        headers={"X-API-Key": raw_key},
-        timeout=10,
-    )
+def authorize_with_key(raw_key: str, application_id: int) -> int:
+    client = _build_runtime_client(raw_key, application_id)
+    try:
+        _ = client.check_sync(
+            user="alice",
+            action="view",
+            resource={"type": "Document", "id": "doc-1"},
+        )
+        return 200
+    except BeowulfAPIError as exc:
+        return int(exc.status_code or 0)
+    finally:
+        client.close()
+
+
+def entitlements_with_key(raw_key: str, application_id: int) -> int:
+    client = _build_runtime_client(raw_key, application_id)
+    try:
+        _ = client.get_entitlements_sync("alice")
+        return 200
+    except BeowulfAPIError as exc:
+        return int(exc.status_code or 0)
+    finally:
+        client.close()
 
 
 def run_cases() -> None:
@@ -88,22 +97,22 @@ def run_cases() -> None:
     cases.append(("initial key issued on create", bool(app_key and app_key_id > 0), True))
 
     # Case 2: authorize for matching app should authenticate (200) even if decision is deny.
-    r = authorize_with_key(app_key, app_id)
-    cases.append(("authorize allows key auth on matching app", r.status_code == 200, True))
+    status = authorize_with_key(app_key, app_id)
+    cases.append(("authorize allows key auth on matching app", status == 200, True))
 
     # Case 3: authorize mismatched app must be denied by binding.
-    r = authorize_with_key(app_key, app_id + 99999)
-    cases.append(("authorize denies key on app mismatch", r.status_code == 403, True))
+    status = authorize_with_key(app_key, app_id + 99999)
+    cases.append(("authorize denies key on app mismatch", status == 403, True))
 
     # Case 4: entitlements mismatched app must be denied by binding.
-    r = entitlements_with_key(app_key, app_id + 99999)
-    cases.append(("entitlements denies key on app mismatch", r.status_code == 403, True))
+    status = entitlements_with_key(app_key, app_id + 99999)
+    cases.append(("entitlements denies key on app mismatch", status == 403, True))
 
     # Case 5: revoke key then ensure runtime auth fails.
     revoke = SESSION.post(f"{BASE_URL}/v1/apps/{app_id}/api-keys/{app_key_id}/revoke", timeout=10)
     cases.append(("revoke endpoint succeeds", revoke.status_code == 204, True))
-    r = authorize_with_key(app_key, app_id)
-    cases.append(("revoked key is rejected", r.status_code == 401, True))
+    status = authorize_with_key(app_key, app_id)
+    cases.append(("revoked key is rejected", status == 401, True))
 
     failures = []
     for name, passed, expected in cases:
