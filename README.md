@@ -583,6 +583,41 @@ permit (
 };
 ```
 
+### Azure.Mcp.Server: First 3 Actions to Guard (Test)
+
+For `https://github.com/microsoft/mcp/tree/main/servers/Azure.Mcp.Server`, start with these three high-impact actions and keep naming aligned to gateway runtime conventions:
+
+- principal: `User::<upn-email>`
+- action type: `MCP::Action`
+- resource type: `MCP::Tool`
+- resource id format: `<tool_server>:<tool_name>`
+
+| Guarded action id | tool_server | tool_name | Cedar resource id (`MCP::Tool`) | Risk tier | Default posture |
+| --- | --- | --- | --- | --- | --- |
+| `azure.storage.account.listKeys` | `azure.storage` | `account.listKeys` | `azure.storage:account.listKeys` | High | deny unless explicitly allowed |
+| `azure.resources.resourceGroup.delete` | `azure.resources` | `resourceGroup.delete` | `azure.resources:resourceGroup.delete` | Critical | deny unless explicit + contextual guard |
+| `azure.authorization.roleAssignments.write` | `azure.authorization` | `roleAssignments.write` | `azure.authorization:roleAssignments.write` | Critical | deny unless explicit + contextual guard |
+
+Authorize payload shape for these actions:
+
+```json
+{
+  "application_id": 7,
+  "principal": { "type": "User", "id": "engineer@contoso.com" },
+  "action": { "type": "MCP::Action", "id": "azure.storage.account.listKeys" },
+  "resource": { "type": "MCP::Tool", "id": "azure.storage:account.listKeys" },
+  "context": {
+    "subscription_id": "sub-123",
+    "resource_group": "rg-prod",
+    "ticket_id": "CHG-1001",
+    "approval_status": "approved",
+    "request_id": "az-mcp-req-001"
+  }
+}
+```
+
+See full mapping table, one request example per action, policy snippets, and rollout/test guidance in [`docs/azure-mcp-guardrails.md`](docs/azure-mcp-guardrails.md).
+
 ### Architecture
 
 ```
